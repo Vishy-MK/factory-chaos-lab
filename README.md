@@ -14,7 +14,7 @@ system would call (see `docs/ARCHITECTURE.md`, part D).
    block, OPC disconnect) through the application's own simulator and scoring harness (`fsmes lab run`).
 3. Injects **real infrastructure faults** into the live plant: killing and restarting the API, OPC UA server, OPC agent
    or floor simulator; freezing a component; holding the database write lock; delaying every plant database
-   statement; CPU contention on the API.
+   statement; capping a component's RAM or CPU through cgroup v2; CPU contention on the API.
 4. Checks a safety policy before, during and after every experiment, cleans up, and refuses to claim recovery it
    cannot show.
 5. Exports lab metrics for Prometheus, ships Grafana dashboards, and collects log excerpts per experiment.
@@ -77,6 +77,8 @@ ephemeral plant and take about two minutes. Add `--dry-run` to validate and run 
 | `database-write-lock-10s` | infrastructure | hold the SQLite write lock for 10 s, roll back |
 | `database-latency-200ms-10s` | infrastructure | add 200 ms before every plant database statement for 10 s |
 | `api-cpu-pressure-15s` | infrastructure | contend for the API's CPU for 15 s |
+| `api-cpu-limit-20pct-15s` | infrastructure | cap the API at 20 % of one CPU (cgroup `cpu.max`) for 15 s |
+| `api-memory-high-64mb-15s` | infrastructure | set the API's `memory.high` to 64 MiB, no swap, for 15 s |
 | `compound-api-then-opc-outage` | infrastructure | two faults in sequence; refused unless `compound.enabled` |
 | `baseline-manufacturing-workflow` | application | 25 line-minutes, no fault, scored |
 | `sim-machine-breakdown-rd` | application | scripted 2-minute breakdown of the rotary denester |
@@ -86,6 +88,24 @@ ephemeral plant and take about two minutes. Add `--dry-run` to validate and run 
 | `sim-opc-disconnect` | application | scripted loss of the OPC UA layer |
 
 Details, parameters and what each experiment has actually shown are in `docs/EXPERIMENTS.md`.
+
+### Parameterised injections with a report
+
+Like `scripts/inject-opc.sh`, two wrappers take the fault's parameters on the command line, check them against the
+policy bounds, print them, run the experiment and print a per-phase report (direct measurements, then downstream
+effects on the API). `--agent` hands the same definition to the Injector agent, which validates, dry-runs and runs
+it through the MCP tools and asks you before the real fault (`--yes` approves in advance); the Recovery Analyst then
+judges the result. `last` prints the most recent report again.
+
+```bash
+scripts/inject-db-latency.sh [delay_ms] [duration_s] [baseline_s] [--agent] [--yes]     # default 200 10 20
+scripts/inject-resource-limit.sh <api|opc-sim|opc-agent|floor> [--cpu PCT] [--memory-high MB] [--memory-max MB] \
+                                 [--duration S] [--baseline S] [--agent] [--yes]       # default --cpu 20, 15 s
+scripts/inject-db-latency.sh last
+python -m chaoslab report [experiment-id]                                               # the same report for any run
+```
+
+See `docs/DATABASE_LATENCY.md` and `docs/RESOURCE_LIMIT.md`.
 
 ## MCP tools for agents
 
@@ -115,6 +135,8 @@ any OpenAI-compatible provider works the same way.
 ```bash
 export MISTRAL_API_KEY=...
 python -m chaoslab agent inject api-process-outage-10s   # asks y/N at the terminal before the real fault
+python -m chaoslab agent inject database-latency-200ms-10s
+python -m chaoslab agent inject api-cpu-limit-20pct-15s
 python -m chaoslab agent analyze <experiment-id>         # verdict saved as results/<id>/agent-analysis-*.json
 ```
 
@@ -140,6 +162,8 @@ terminal the answer is no); the safety policy still decides what runs. Transcrip
 
 ```bash
 ./scripts/watch.sh      # htop, tree view, only the plant and the lab
+                        # during a database_latency window the delayed clients show as cl:delay/api and
+                        # cl:delay/opcagt; a resource_limit run shows its reset helper as cl:fault:limit
 ```
 
 Every process the lab runs has a name, so a fault is visible at the OS level as it happens: a killed component
@@ -165,6 +189,7 @@ components to pick up their names. `scripts/watch.sh` uses its own htop configur
 
 ```bash
 python -m chaoslab last                # summary of the most recent result
+python -m chaoslab report [<id>]       # parameters, outcome and a per-phase metrics table
 python -m chaoslab runs
 python -m chaoslab show <id-or-fragment>
 python -m chaoslab compare <a> <b>
@@ -230,6 +255,7 @@ Stop the plant, delete `runtime/`, run `scripts/setup.sh`. `results/` and `facto
 ## Known limitations
 
 - Single host, process-level faults only. No network partition, packet loss, container or PostgreSQL faults.
+  Resource limits act on one component's own cgroup scope, not on the host.
 - Database *outage* and *API latency* faults are not supported in lightweight mode and are listed as unsupported
   with reasons (`python -m chaoslab faults`). Database latency is supported through a lab-owned SQLAlchemy hook,
   not a network delay; see `docs/DATABASE_LATENCY.md` for what it does and does not delay.

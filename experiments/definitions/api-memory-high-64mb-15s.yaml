@@ -1,0 +1,26 @@
+name: api-memory-high-64mb-15s
+description: Set the API's memory.high to 64 MiB with swap disabled for 15 seconds, so the kernel reclaims the scope down to the limit (throttling it if its anonymous memory exceeds it), then lift the limit.
+category: infrastructure
+target:
+  plant: bottling
+  component: api
+fault:
+  type: resource_limit
+  parameters:
+    memory_high_mb: 64
+    duration_s: 15
+baseline_s: 20
+workload: baseline
+preconditions:
+  - component_running
+  - cgroup_scopes_available
+expected_measurements:
+  - memory_current_mb_max
+  - memory_high_events
+  - memory_stall_ms
+  - api_latency_ms
+  - api_success_ratio
+cleanup: stop the reset helper and restore the scope's limits to unlimited
+recovery:
+  timeout_s: 90
+scoring: none

@@ -65,6 +65,26 @@ def sqlite_lock(db: str, seconds: int) -> int:
     return 0
 
 
+def resource_reset(unit: str, seconds: int, original: str | None) -> int:
+    """Lift a lab scope's limits at the deadline, so they end even if the controller and watchdog are gone."""
+    import json
+
+    from chaoslab.chaos import cgroups
+
+    seconds = max(1, min(int(seconds), HARD_LIMIT_S))
+    cgroups.scope_dir(unit)
+    restore = json.loads(original) if original else None
+    try:
+        _install_term_handler()
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            time.sleep(min(0.2, max(0.0, deadline - time.monotonic())))
+    finally:
+        # Also on SIGTERM: whoever stops this helper early is cleaning up, and lifting twice is harmless.
+        cgroups.lift(unit, restore)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="chaoslab.chaos.holders")
     sub = parser.add_subparsers(dest="kind", required=True)
@@ -75,11 +95,17 @@ def main(argv: list[str] | None = None) -> int:
     lock = sub.add_parser("sqlite_lock")
     lock.add_argument("--db", required=True)
     lock.add_argument("--seconds", type=int, required=True)
+    reset = sub.add_parser("resource_reset")
+    reset.add_argument("--unit", required=True)
+    reset.add_argument("--seconds", type=int, required=True)
+    reset.add_argument("--original")
     args = parser.parse_args(argv)
-    proctitle.set_name("cl:fault:cpu" if args.kind == "cpu_burn" else "cl:fault:dblock")
+    proctitle.set_name({"cpu_burn": "cl:fault:cpu", "sqlite_lock": "cl:fault:dblock"}.get(args.kind, "cl:fault:limit"))
     try:
         if args.kind == "cpu_burn":
             return cpu_burn(args.seconds, args.percent, args.cpu)
+        if args.kind == "resource_reset":
+            return resource_reset(args.unit, args.seconds, args.original)
         return sqlite_lock(args.db, args.seconds)
     except SystemExit as exc:
         return int(exc.code or 0)

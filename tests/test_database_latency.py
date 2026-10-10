@@ -144,9 +144,13 @@ def test_hook_adds_the_configured_delay_only_to_the_plant_database(settings, dat
     unrelated = timed(other_engine)
     assert during - before >= 0.14, (before, during)
     assert unrelated < 0.05
+    with open("/proc/self/comm") as handle:
+        assert handle.read().strip() == "cl:delay/api"
     hook.remove_control(directory)
     time.sleep(hook.CONTROL_POLL_S * 2)
     assert timed(plant_engine) < 0.05
+    with open("/proc/self/comm") as handle:
+        assert handle.read().strip() != "cl:delay/api", "the name goes back when the delay ends"
     installed.flush(force=True)
     stats = [s for s in hook.read_stats(directory) if s["pid"] == os.getpid()][0]
     assert stats["injected"]["statements"] >= 3
@@ -198,7 +202,9 @@ for _ in range(3):
         conn.execute(text("SELECT 1")).fetchall()
     durations.append(time.perf_counter() - started)
 import chaoslab_dbhook
-print(json.dumps({"hooked": chaoslab_dbhook._INSTALLED is not None, "mean_s": sum(durations) / 3}))
+with open("/proc/self/comm") as handle:
+    comm = handle.read().strip()
+print(json.dumps({"hooked": chaoslab_dbhook._INSTALLED is not None, "mean_s": sum(durations) / 3, "comm": comm}))
 """
 
 
@@ -223,7 +229,8 @@ def test_sitecustomize_loads_the_hook_only_into_database_clients(tmp_path, setti
     finally:
         hook.remove_control(str(settings.db_hook_dir))
     assert api["hooked"] is True and api["mean_s"] >= 0.11
-    assert sim["hooked"] is False and sim["mean_s"] < 0.05
+    assert api["comm"] == "cl:delay/api", "htop must show the active delay"
+    assert sim["hooked"] is False and sim["mean_s"] < 0.05 and sim["comm"] == "bottling/opcsim"
     assert str(PLANT_NAMES_DIR) in with_plant_names({})["PYTHONPATH"]
 
 

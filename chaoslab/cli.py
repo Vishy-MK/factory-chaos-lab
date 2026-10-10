@@ -285,6 +285,19 @@ def cmd_show(args) -> int:
     return EXIT_OK
 
 
+def cmd_report(args) -> int:
+    from chaoslab.report import render
+
+    api = _api(args.root)
+    try:
+        result = api.result(args.experiment)
+    except FileNotFoundError as exc:
+        _warn(str(exc))
+        return EXIT_FAILED
+    _emit(result, args.json, render(result))
+    return EXIT_OK
+
+
 def cmd_runs(args) -> int:
     api = _api(args.root)
     runs = api.store.list_runs()
@@ -486,6 +499,9 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("first")
     compare.add_argument("second")
     compare.set_defaults(func=cmd_compare)
+    report = sub.add_parser("report", help="parameters, outcome and per-phase metrics of one result")
+    report.add_argument("experiment", nargs="?", default="latest", help="experiment id (default: the latest)")
+    report.set_defaults(func=cmd_report)
     sub.add_parser("resources", help="check resource usage and the memory gate").set_defaults(func=cmd_resources)
     sub.add_parser("emergency-stop", help="stop active fault injection and clean up").set_defaults(
         func=cmd_emergency_stop)

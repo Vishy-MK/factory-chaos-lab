@@ -36,7 +36,8 @@ chaoslab/
     logs.py               time-window log extraction with redaction
   chaos/
     faults.py        fault registry: parameters, bounds, preconditions, inject, cleanup, removal check
-    holders.py       self-limiting helper processes (CPU burner, SQLite lock holder)
+    holders.py       self-limiting helper processes (CPU burner, SQLite lock holder, cgroup limit reset)
+    cgroups.py       lab-owned user-systemd scopes: create, write and lift cgroup v2 limits, read counters
     controller.py    lifecycle orchestration and result assembly
     recovery.py      staged recovery verification
     watchdog.py      independent cleanup process
@@ -49,13 +50,15 @@ chaoslab/
   lifecycle.py       prepare / start / stop / status of the plant and exporter
   api.py             the contract for a future caller (see below)
   cli.py             `python -m chaoslab ...`
+  report.py          parameters, outcome and per-phase metrics table of one result (`chaoslab report`)
 ```
 
 Control flow of an infrastructure experiment:
 
 ```
 validate (schema, policy) -> resource gate -> lease + watchdog -> preflight (health, preconditions)
- -> baseline (sampler, workload) -> intent record -> inject -> hold -> cleanup + removal check
+ -> fault preparation (e.g. move a component into its cgroup scope) -> baseline (sampler, workload)
+ -> intent record -> inject -> hold -> cleanup + removal check
  -> recovery verification (stable for 3 samples) -> post window -> result.json
 ```
 

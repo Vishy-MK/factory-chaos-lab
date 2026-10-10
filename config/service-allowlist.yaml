@@ -35,6 +35,11 @@ fault_targets:
     - floor
   cpu_pressure:
     - api
+  resource_limit:
+    - api
+    - opc-sim
+    - opc-agent
+    - floor
   sqlite_write_lock:
     - database
   database_latency:

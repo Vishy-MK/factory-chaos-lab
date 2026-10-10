@@ -69,6 +69,7 @@ class MetricsAdapter:
             for name, row in table.items()
         }
         sample["database"] = database_counters(self.plant.settings)
+        sample["cgroups"] = scope_counters(table)
         host = resources.host_snapshot(cpu_interval=0.0)
         sample["host"] = host.as_dict()
         return sample
@@ -122,7 +123,82 @@ class MetricsAdapter:
             "host_available_memory_mb_min": round(min(s["host"]["available_memory_mb"] for s in samples), 1),
             "host_cpu_percent_max": round(max(s["host"]["cpu_percent"] for s in samples), 1),
             "database": summarise_database(samples),
+            "cgroups": summarise_cgroups(samples),
         }
+
+
+def scope_counters(table: dict[str, dict]) -> dict | None:
+    """cgroup counters of every component that runs in its lab scope, keyed by component; None if none does."""
+    try:
+        from chaoslab.chaos import cgroups
+    except Exception:
+        return None
+    found = {}
+    for name, row in table.items():
+        pid = row.get("pid")
+        unit = cgroups.process_unit(pid) if pid else None
+        if not unit:
+            continue
+        try:
+            stats = cgroups.stats(unit)
+        except Exception:
+            stats = None
+        if stats:
+            found[name] = stats
+    return found or None
+
+
+def _counter_delta(start, end):
+    if start is None or end is None:
+        return None
+    # A scope recreated inside the phase (component restarted) starts its counters again from zero.
+    return end - start if end >= start else end
+
+
+def summarise_cgroups(samples: list[dict]) -> dict | None:
+    """Per scoped component: memory, OOM kills, CPU use, throttling and pressure stalls inside the phase."""
+    with_cg = [s for s in samples if s.get("cgroups")]
+    if not with_cg:
+        return None
+    out = {}
+    components = sorted({name for s in with_cg for name in s["cgroups"]})
+    for name in components:
+        rows = [(s["t"], s["cgroups"][name]) for s in with_cg if name in s["cgroups"]]
+        (t0, first), (t1, last) = rows[0], rows[-1]
+        window = t1 - t0
+        current = [r["memory_current"] for _, r in rows if r.get("memory_current") is not None]
+        usage = _counter_delta(first.get("cpu_usage_us"), last.get("cpu_usage_us"))
+        periods = _counter_delta(first.get("cpu_nr_periods"), last.get("cpu_nr_periods"))
+        throttled = _counter_delta(first.get("cpu_nr_throttled"), last.get("cpu_nr_throttled"))
+        throttled_us = _counter_delta(first.get("cpu_throttled_us"), last.get("cpu_throttled_us"))
+
+        def stall(kind):
+            a = ((first.get(kind) or {}).get("some") or {}).get("total_us")
+            b = ((last.get(kind) or {}).get("some") or {}).get("total_us")
+            delta = _counter_delta(a, b)
+            return round(delta / 1000.0, 1) if delta is not None else None
+
+        events = {k: _counter_delta(first["memory_events"].get(k), last["memory_events"].get(k))
+                  for k in ("high", "max", "oom_kill")}
+        out[name] = {
+            "unit": last.get("unit"),
+            "samples": len(rows),
+            "window_s": round(window, 2),
+            "limits_end": last.get("limits"),
+            "memory_current_mb_max": round(max(current) / 1048576, 1) if current else None,
+            "memory_current_mb_mean": round(statistics.fmean(current) / 1048576, 1) if current else None,
+            "memory_peak_mb": round(last["memory_peak"] / 1048576, 1) if last.get("memory_peak") else None,
+            "memory_high_events": events["high"],
+            "memory_max_events": events["max"],
+            "oom_kills": events["oom_kill"],
+            "cpu_percent_mean": round(usage / (window * 1e6) * 100, 1) if usage is not None and window > 0 else None,
+            "cpu_throttled_periods": throttled,
+            "cpu_throttled_ratio": round(throttled / periods, 3) if periods else None,
+            "cpu_throttled_ms": round(throttled_us / 1000.0, 1) if throttled_us is not None else None,
+            "memory_stall_ms": stall("memory_pressure"),
+            "cpu_stall_ms": stall("cpu_pressure"),
+        }
+    return out
 
 
 def _longest_stall(ids: list[tuple[float, int]]) -> float | None:

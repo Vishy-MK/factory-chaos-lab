@@ -140,6 +140,26 @@ class PolicyValidator:
                 if resolved.get("duration_s", 0) > pressure.get("max_duration_s", 30):
                     reasons.append(f"{label}: cpu_pressure duration exceeds policy maximum "
                                    f"{pressure['max_duration_s']}")
+            if fault_name == "resource_limit":
+                limit = self.policy.get("resource_limit", {})
+                if not limit.get("enabled", False):
+                    reasons.append(f"{label}: resource_limit is disabled by safety policy "
+                                   "(resource_limit.enabled: false)")
+                memory = [resolved.get(k) for k in ("memory_high_mb", "memory_max_mb") if resolved.get(k)]
+                if not memory and not resolved.get("cpu_percent"):
+                    reasons.append(f"{label}: resource_limit needs memory_high_mb, memory_max_mb or cpu_percent")
+                if any(m < limit.get("min_memory_mb", 64) for m in memory):
+                    reasons.append(f"{label}: resource_limit memory below policy minimum "
+                                   f"{limit.get('min_memory_mb', 64)} MiB")
+                if resolved.get("memory_high_mb") and resolved.get("memory_max_mb") \
+                        and resolved["memory_high_mb"] > resolved["memory_max_mb"]:
+                    reasons.append(f"{label}: memory_high_mb must not exceed memory_max_mb")
+                if resolved.get("cpu_percent") and resolved["cpu_percent"] < limit.get("min_cpu_percent", 5):
+                    reasons.append(f"{label}: resource_limit cpu_percent below policy minimum "
+                                   f"{limit.get('min_cpu_percent', 5)}")
+                if resolved.get("duration_s", 0) > limit.get("max_duration_s", 30):
+                    reasons.append(f"{label}: resource_limit duration exceeds policy maximum "
+                                   f"{limit.get('max_duration_s', 30)}")
             if fault_name == "database_latency":
                 latency = self.policy.get("database_latency", {})
                 if not latency.get("enabled", False):

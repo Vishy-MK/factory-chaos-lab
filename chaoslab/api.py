@@ -156,6 +156,8 @@ class LabApi:
             "experiment_id": resolved,
             "observed_metrics": result.get("observed_metrics"),
             "production_measurements": result.get("production_measurements"),
+            # Fault-specific evidence (direct database or cgroup measurements), when the fault produces any.
+            "fault_evidence": {k: result[k] for k in ("database_latency", "resource_limit") if result.get(k)} or None,
         }
         if include_samples:
             path = self.store.directory(resolved) / "samples.jsonl"
@@ -184,7 +186,7 @@ class LabApi:
         result = self.store.read_result(self.store.resolve(experiment_id))
         return {"experiment_id": result["experiment_id"], "recovery": result.get("recovery"),
                 "cleanup": result.get("cleanup"), "final_health": result.get("final_health"),
-                "overall_result": result.get("overall_result")}
+                "preparation": result.get("preparation"), "overall_result": result.get("overall_result")}
 
     def compare(self, first: str, second: str) -> dict:
         return compare_results(self.result(first), self.result(second))
@@ -245,4 +247,15 @@ class LabApi:
         if removal.detail != "no activation present":
             actions.append({"action": "remove database latency activation", "ok": removal.ok,
                             "detail": removal.detail})
-        return {"ok": removal.ok, "actions": actions}
+        from chaoslab.chaos import cgroups
+
+        lifted_ok = True
+        for unit in cgroups.lab_units():
+            try:
+                if not cgroups.is_unlimited(cgroups.read_limits(unit)):
+                    cgroups.lift(unit)
+                    actions.append({"action": "lift cgroup limits", "unit": unit, "ok": True})
+            except (OSError, cgroups.CgroupError) as exc:
+                lifted_ok = False
+                actions.append({"action": "lift cgroup limits", "unit": unit, "ok": False, "detail": str(exc)})
+        return {"ok": removal.ok and lifted_ok, "actions": actions}

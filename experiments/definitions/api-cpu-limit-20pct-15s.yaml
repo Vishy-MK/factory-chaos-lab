@@ -1,0 +1,26 @@
+name: api-cpu-limit-20pct-15s
+description: Cap the API's CPU at 20% of one CPU through its cgroup for 15 seconds, then lift the cap.
+category: infrastructure
+target:
+  plant: bottling
+  component: api
+fault:
+  type: resource_limit
+  parameters:
+    cpu_percent: 20
+    duration_s: 15
+baseline_s: 20
+workload: baseline
+preconditions:
+  - component_running
+  - cgroup_scopes_available
+expected_measurements:
+  - cpu_throttled_ratio
+  - cpu_percent_mean
+  - api_latency_ms
+  - api_success_ratio
+  - tag_ingest_per_second
+cleanup: stop the reset helper and restore the scope's limits to unlimited
+recovery:
+  timeout_s: 90
+scoring: none

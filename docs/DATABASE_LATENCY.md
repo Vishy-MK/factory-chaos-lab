@@ -6,7 +6,9 @@ for a bounded window, then verifies the delay is gone and database latency is ba
 ```bash
 scripts/start.sh                     # the plant must be (re)started by the lab so the hook loads
 python -m chaoslab run experiments/definitions/database-latency-200ms-10s.yaml
-python -m chaoslab run experiments/definitions/database-latency-200ms-10s.yaml --dry-run   # validate + preflight only
+python -m chaoslab run experiments/definitions/database-latency-200ms-10s.yaml --dry-run   # validate + gate only
+scripts/inject-db-latency.sh 150 8 15            # any delay/duration/baseline, with a per-phase report
+scripts/inject-db-latency.sh 200 10 20 --agent   # the Injector agent runs it, the Recovery Analyst judges it
 ```
 
 ## Why a hook and not a proxy

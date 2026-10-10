@@ -241,6 +241,18 @@ class Controller:
         if problems:
             return self._finish(result, tracker, State.REJECTED, "rejected_preconditions", problems)
 
+        # Before the baseline, so the baseline measures the plant as it will be injected (e.g. in its lab scope).
+        for index, step in enumerate(decision.normalised):
+            fault = fault_registry.FAULTS[step["fault"]["type"]]
+            prepared = fault.prepare(ctx, step["target"], step["fault"]["parameters"])
+            if prepared is None:
+                continue
+            result.setdefault("preparation", []).append({"step": index + 1, **prepared.as_dict()})
+            self.audit.record(run_id, "prepared", step=index + 1, ok=prepared.ok, detail=prepared.detail)
+            if not prepared.ok:
+                return self._finish(result, tracker, State.REJECTED, "rejected_preconditions",
+                                    [f"step {index + 1} preparation: {prepared.detail}"])
+
         integrity, integrity_detail = self.plant.database_integrity()
         result["initial_resources"]["database_integrity"] = {"ok": integrity, "detail": integrity_detail}
 
@@ -380,6 +392,14 @@ class Controller:
             if recovery_report:
                 recovery_report["stages"]["database_latency_restored"] = evidence["restored"]
                 recovery_report["recovered"] = recovery_report["recovered"] and evidence["restored"]["ok"]
+        limit_steps = [s for s in step_results if s["type"] == "resource_limit" and s.get("injected")]
+        if limit_steps:
+            evidence = self._resource_limit_evidence(result["observed_metrics"], limit_steps, recovery_report,
+                                                     all_samples)
+            result["resource_limit"] = evidence
+            if recovery_report:
+                recovery_report["stages"]["resource_limits_lifted"] = evidence["lifted"]
+                recovery_report["recovered"] = recovery_report["recovered"] and evidence["lifted"]["ok"]
         result["samples_file"] = "samples.jsonl"
         (run_dir / "samples.jsonl").write_text(
             "\n".join(json.dumps(s, separators=(",", ":")) for s in all_samples) + "\n", encoding="utf-8")
@@ -428,8 +448,7 @@ class Controller:
         report = result["recovery"]
         stages = report["stages"]
         core_stages = ["fault_removed", "service_available", "operation_succeeds", "manufacturing_behaviour"]
-        if "database_latency_restored" in stages:
-            core_stages.append("database_latency_restored")
+        core_stages += [s for s in ("database_latency_restored", "resource_limits_lifted") if s in stages]
         core = all(stages[s]["ok"] for s in core_stages)
         reasons = [f"{name}: {stage['detail']}" for name, stage in stages.items() if not stage["ok"]]
         if core and report["recovered"]:
@@ -507,6 +526,56 @@ class Controller:
                      "the activation window, while the fault phase also spans cleanup and removal checks."),
         }
 
+    def _resource_limit_evidence(self, observed: dict, steps: list[dict], recovery: dict | None,
+                                 samples: list[dict] | None = None) -> dict:
+        from chaoslab.adapters.metrics import summarise_cgroups
+
+        step = steps[-1]
+        record = step.get("record") or {}
+        component = step["target"].get("component")
+        phases = ("baseline", "fault", "recovery", "post")
+        scoped = {phase: ((observed.get(phase) or {}).get("cgroups") or {}).get(component) for phase in phases}
+        window = None
+        if samples and record.get("applied_at") is not None:
+            start = float(record["applied_at"])
+            end = start + float(record.get("duration_s") or 0)
+            window = (summarise_cgroups([s for s in samples if start <= s["t"] <= end]) or {}).get(component)
+        scoped["limit_window"] = window
+        downstream = {}
+        for phase in phases:
+            summary = observed.get(phase) or {}
+            downstream[phase] = None if not summary.get("samples") else {k: summary.get(k) for k in (
+                "samples", "api_success_ratio", "authenticated_success_ratio", "api_latency_ms",
+                "tag_ingest_per_second", "tag_ingest_stall_s_max", "machines_connected_min",
+                "component_alive_ratio")}
+        post = scoped["post"]
+        if not post:
+            lifted = {"ok": False, "detail": f"no cgroup samples for {component} after recovery"}
+        else:
+            limits = post.get("limits_end") or {}
+            unlimited = bool(limits) and all((v or "").split(" ")[0] == "max" for v in limits.values())
+            quiet = (post.get("cpu_throttled_periods") or 0) == 0 and (post.get("memory_high_events") or 0) == 0
+            lifted = {"ok": unlimited and quiet,
+                      "detail": f"{component} limits after recovery {limits}; throttled periods "
+                                f"{post.get('cpu_throttled_periods')}, memory.high events "
+                                f"{post.get('memory_high_events')}"}
+        oom = [p.get("oom_kills") for p in scoped.values() if p and p.get("oom_kills")]
+        return {
+            "component": component,
+            "configured": {k: step["parameters"].get(k) for k in ("memory_high_mb", "memory_max_mb", "cpu_percent",
+                                                                 "duration_s")},
+            "applied": record.get("applied"),
+            "unit": record.get("unit"),
+            "cgroup": scoped,
+            "oom_kills_total": sum(oom) if oom else 0,
+            "downstream": downstream,
+            "time_to_recovery_s": (recovery or {}).get("duration_s"),
+            "lifted": lifted,
+            "note": ("cgroup comes from the component's lab scope (memory.current/peak/events, cpu.stat, PSI); "
+                     "limit_window covers only the samples while the limits were applied. downstream comes from "
+                     "the lab's API probes and the plant's /metrics."),
+        }
+
     def _oee_snapshot(self) -> dict | None:
         states = self.plant.equipment_states()
         if not states.ok or not isinstance(states.body, list):
@@ -542,6 +611,13 @@ class Controller:
             "such values are reported as unavailable, not zero.",
             "The upstream scoring harness only scores its own ephemeral replay and is not applied here.",
         ]
+        if any(step.fault_type == "resource_limit" for step in experiment.steps):
+            notes += [
+                "resource_limit restarts the target component once into its lab scope before the baseline if it "
+                "is not already there; that restart is not part of the fault window.",
+                "cgroup limits apply to the component's own scope only; host memory and other components are not "
+                "limited. A hard memory limit below the working set ends in a kernel OOM kill and a restart.",
+            ]
         if any(step.fault_type == "database_latency" for step in experiment.steps):
             notes += [
                 "database_latency delays SQL statements SQLAlchemy executes through a cursor in the api and "

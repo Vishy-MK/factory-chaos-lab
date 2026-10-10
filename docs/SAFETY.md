@@ -13,6 +13,8 @@ An experiment may only act on resources named in `config/service-allowlist.yaml`
   `MES_PLANT_NAME` in their environment, so a same-named process belonging to something else is not matched.
 - resource: the plant's SQLite database file, addressed as `database`, never by path.
 - per fault: which of those components the fault may target (`fault_targets`).
+- cgroup scopes: only `chaoslab-<plant>-<component>.scope` under this user's systemd `app.slice`, derived from the
+  allowlisted component name. No cgroup path is ever taken from a definition or a record.
 
 Anything else is rejected before anything runs. There is no way to name an arbitrary process, address, container or
 file.
@@ -29,6 +31,7 @@ file.
 | Whole experiment wall time | 600 s | policy (estimate) and harness timeout 420 s |
 | CPU pressure | at most 80 % duty, 30 s | policy and the helper process clamps again |
 | Memory pressure | disabled | `memory_pressure` is listed as unsupported |
+| Resource limit | memory at least 64 MiB, CPU at least 5 % of one CPU, 30 s, at least one limit; can be switched off | policy (`resource_limit`); the reset helper clamps its own deadline to 120 s |
 | Database latency | at most 1000 ms per statement, 30 s; can be switched off | policy (`database_latency`); the hook clamps again to 2000 ms and a 120 s window |
 | Workload | at most 5 requests/s; high-volume profiles refused | policy and generator |
 | Available memory | refuse when below 1500 MB | resource gate before every experiment and before start |
@@ -51,6 +54,8 @@ file.
 6. **Self-limiting helpers**: the CPU burner and the SQLite lock holder end themselves at their deadline and clamp
    to 120 s regardless of what they are told. The database latency hook ignores its activation once the
    CLOCK_MONOTONIC deadline written into it has passed, if it is from another boot, or if its window exceeds 120 s.
+   A resource limit is only written after its reset helper is running; the helper lifts the limits at the deadline
+   or when it is told to stop.
    If the controller and watchdog both died, all of them still stop.
 7. **Cleanup is verified**, not assumed: every fault has a separate `removed` check (process running, process not
    stopped, lock acquirable, affinity restored, burner gone, latency activation absent and no further delayed
@@ -69,7 +74,7 @@ file.
    records `aborted`;
 2. waits up to 20 s for the lease to be released; if it is not, it runs the lease's cleanup records itself;
 3. sweeps for stopped plant components (SIGCONT) and lab helper processes (SIGTERM), and removes any database
-   latency activation file, recorded in a lease or not.
+   latency activation file, recorded in a lease or not, and lifts any limits left on a lab cgroup scope.
 
 It does not restart components that are not part of an active lease, does not touch Docker, and does not touch
 unrelated services.
@@ -88,7 +93,7 @@ unrelated services.
 ## Privileges
 
 Everything runs as the unprivileged desktop user. `cpu_pressure` changes CPU affinity of the user's own process and
-restores it. Signals are sent only to that user's processes. No `sudo`.
+restores it. `resource_limit` writes cgroup files of scopes the user's own systemd manager delegates to the user. Signals are sent only to that user's processes. No `sudo`.
 
 ## Not enforced / limits of the guarantees
 
@@ -102,5 +107,10 @@ restores it. Signals are sent only to that user's processes. No `sudo`.
   prove those ports are free if an unrelated program took them.
 - The resource gate samples memory when an experiment starts. It does not stop an experiment if memory later falls.
 - The CPU pressure experiment shares the pinned CPU with whatever else the desktop is running on it.
+- `resource_limit` restarts its target component once, before the baseline, to move it into its scope. A hard memory
+  limit below the working set ends in a kernel OOM kill of that component; cleanup restarts it. The OOM kill can
+  interrupt an in-flight transaction like `process_outage` with `KILL`.
+- `--dry-run` checks the definition, the policy and the resource gate; fault-specific preconditions (hook loaded,
+  cgroup scopes available) are checked only by a real run, before anything is injected.
 - The database latency hook runs inside the plant's api and opc-agent. It catches its own errors, but it is lab
   code in the application's process; it is only loaded when the lab starts the plant with `CHAOSLAB_DB_HOOK_*` set.

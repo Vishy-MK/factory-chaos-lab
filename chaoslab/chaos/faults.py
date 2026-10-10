@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import signal
 import sqlite3
@@ -89,6 +90,10 @@ class Fault:
 
     def preconditions(self, ctx: FaultContext, target: dict, params: dict) -> list[Check]:
         return []
+
+    def prepare(self, ctx: FaultContext, target: dict, params: dict) -> Check | None:
+        """Bring the target into an injectable state before the baseline; None when nothing is needed."""
+        return None
 
     def intent(self, target: dict, params: dict) -> dict:
         return {"type": self.spec.name, **{k: v for k, v in target.items() if k != "plant"}}
@@ -586,6 +591,177 @@ class DatabaseLatency(Fault):
                      f"after a {settle:.1f}s settle ({len(second)} hooked processes)")
 
 
+def _cgroups():
+    from chaoslab.chaos import cgroups
+
+    return cgroups
+
+
+class ResourceLimit(Fault):
+    spec = FaultSpec(
+        name="resource_limit",
+        layer="infrastructure",
+        summary=("Cap one plant component's RAM and/or CPU through cgroup v2 for duration_s: memory_high_mb throttles "
+                 "and reclaims, memory_max_mb is a hard limit the kernel enforces with the OOM killer, cpu_percent "
+                 "is a CPU quota (100 = one CPU). Swap is disabled for the component while limited. Before the "
+                 "baseline the component is restarted once into its own lab scope (chaoslab-<plant>-<component>"
+                 ".scope) if it is not already in it."),
+        params=(
+            Param("duration_s", "int", "seconds the limits stay applied", 1, 60, 15),
+            Param("memory_high_mb", "int", "memory.high in MiB: throttle and reclaim above it", 32, 4096),
+            Param("memory_max_mb", "int", "memory.max in MiB: hard limit, OOM kill above it", 32, 4096),
+            Param("cpu_percent", "int", "cpu.max quota as a percentage of one CPU", 5, 400),
+        ),
+        target_keys=("plant", "component"),
+        expected_effects=(
+            "memory_high_mb below the working set: reclaim and memory stalls, slower requests or ingestion",
+            "memory_max_mb below the working set: the kernel OOM-kills the component; cleanup restarts it",
+            "cpu_percent: CPU throttling and higher latency on the component",
+            "other components: no direct effect",
+        ),
+        cleanup=("stop the reset helper and restore the scope's recorded limits (unlimited); restart the component "
+                 "in its scope if the kernel killed it"),
+        recovery_criteria=("limits lifted", "component running", "api healthy", "authenticated API operation succeeds",
+                           "all machines connected", "tag ingestion advancing", "floor recording checks",
+                           "database integrity check ok", "no throttling or memory.high events after recovery"),
+        preconditions=("component process running", "user cgroup scopes available"),
+    )
+
+    def hold_seconds(self, params):
+        return float(params.get("duration_s", 15))
+
+    def _unit(self, ctx: FaultContext, component: str) -> str:
+        return _cgroups().unit_name(ctx.settings.plant_name, component)
+
+    def preconditions(self, ctx, target, params):
+        checks = _component_precondition(ctx, target["component"])
+        ok, detail = _cgroups().available()
+        checks.append(Check("cgroup_scopes_available", ok, detail))
+        return checks
+
+    def prepare(self, ctx, target, params):
+        cgroups = _cgroups()
+        component = target["component"]
+        unit = self._unit(ctx, component)
+        proc = ctx.plant.find_components().get(component)
+        if proc is not None and cgroups.process_unit(proc.pid) == unit:
+            cgroups.lift(unit)
+            return Check("prepared", True, f"{component} (pid {proc.pid}) already runs in {unit}")
+        try:
+            if proc is not None:
+                ctx.plant.kill_component(component, signal.SIGTERM)
+            pid = ctx.plant.spawn_component(component, scope_unit=unit)
+        except Exception as exc:
+            if component not in ctx.plant.find_components():
+                try:
+                    ctx.plant.spawn_component(component)
+                except Exception:
+                    pass
+            return Check("prepared", False, f"could not restart {component} into {unit}: {exc}")
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and component not in ctx.plant.find_components():
+            time.sleep(0.3)
+        running = ctx.plant.find_components().get(component)
+        if running is None or cgroups.process_unit(running.pid) != unit:
+            return Check("prepared", False, f"{component} is not running in {unit} after the restart (pid {pid})")
+        timeout = float(ctx.settings.lab["plant"].get("start_timeout_s", 90))
+        healthy = ctx.plant.wait_healthy(timeout)
+        return Check("prepared", healthy, f"{component} restarted into {unit} as pid {running.pid}; plant healthy "
+                                          f"again: {healthy}")
+
+    def inject(self, ctx, target, params):
+        cgroups = _cgroups()
+        component = target["component"]
+        unit = self._unit(ctx, component)
+        proc = ctx.plant.find_components().get(component)
+        if proc is None:
+            raise PlantError(f"component {component} was not running")
+        if cgroups.process_unit(proc.pid) != unit:
+            raise PlantError(f"{component} (pid {proc.pid}) is not in its lab scope {unit}")
+        values = cgroups.limit_values(params.get("memory_high_mb"), params.get("memory_max_mb"),
+                                      params.get("cpu_percent"))
+        if not values:
+            raise PlantError("resource_limit needs memory_high_mb, memory_max_mb or cpu_percent")
+        original = cgroups.read_limits(unit)
+        seconds = int(params.get("duration_s", 15))
+        # The helper exists before any limit does, so the limits always have something that will lift them.
+        helper = subprocess.Popen(
+            [sys.executable, "-m", "chaoslab.chaos.holders", "resource_reset", "--unit", unit, "--seconds",
+             str(seconds), "--original", json.dumps(original)],
+            cwd=str(PACKAGE_ROOT), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True,
+        )
+        try:
+            cgroups.write_limits(unit, values)
+        except Exception:
+            helper.terminate()
+            raise
+        return {"type": "resource_limit", "component": component, "pid": proc.pid, "unit": unit,
+                "applied_at": time.time(),
+                "original": original, "applied": values, "helper_pid": helper.pid, "duration_s": seconds,
+                "memory_high_mb": params.get("memory_high_mb"), "memory_max_mb": params.get("memory_max_mb"),
+                "cpu_percent": params.get("cpu_percent"), "stats_at_injection": cgroups.stats(unit)}
+
+    def cleanup(self, ctx, record):
+        cgroups = _cgroups()
+        component = record.get("component")
+        if component not in COMPONENTS:
+            return Check("cleanup", False, f"unknown component {component!r}")
+        unit = self._unit(ctx, component)
+        problems, notes = [], []
+        helper = record.get("helper_pid")
+        if helper and _alive(helper):
+            try:
+                os.kill(helper, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and _alive(helper):
+                time.sleep(0.1)
+            if _alive(helper):
+                problems.append(f"reset helper {helper} still alive")
+        try:
+            lifted = cgroups.lift(unit, record.get("original"))
+            notes.append(f"limits restored on {unit}" if lifted else f"{unit} gone (component exited)")
+        except (OSError, cgroups.CgroupError) as exc:
+            problems.append(f"could not restore limits on {unit}: {exc}")
+        stats = cgroups.stats(unit)
+        if stats and stats["memory_events"]["oom_kill"]:
+            notes.append(f"kernel OOM kills in the scope: {stats['memory_events']['oom_kill']}")
+        if component not in ctx.plant.find_components():
+            try:
+                pid = ctx.plant.spawn_component(component, scope_unit=unit)
+                deadline = time.monotonic() + 15
+                while time.monotonic() < deadline and component not in ctx.plant.find_components():
+                    time.sleep(0.3)
+                if component in ctx.plant.find_components():
+                    notes.append(f"{component} was not running; restarted as pid {pid}")
+                else:
+                    problems.append(f"{component} did not appear after restart")
+            except Exception as exc:
+                problems.append(f"could not restart {component}: {exc}")
+        return Check("cleanup", not problems, "; ".join(problems + notes))
+
+    def removed(self, ctx, record):
+        cgroups = _cgroups()
+        component = record.get("component")
+        if component not in COMPONENTS:
+            return Check("fault_removed", False, f"unknown component {component!r}")
+        unit = self._unit(ctx, component)
+        running = component in ctx.plant.find_components()
+        helper_alive = _alive(record.get("helper_pid"))
+        try:
+            limits = cgroups.read_limits(unit) if cgroups.scope_dir(unit).is_dir() else None
+        except cgroups.CgroupError:
+            limits = None
+        original = record.get("original") or {}
+        restored = limits is not None and all(
+            limits.get(name) == (original.get(name) or cgroups.UNLIMITED[name]) for name in cgroups.LIMIT_FILES)
+        return Check("fault_removed", running and restored and not helper_alive,
+                     f"{component} running: {running}; limits restored: {restored} ({limits}); "
+                     f"reset helper alive: {helper_alive}")
+
+
 class SimulatorFault(Fault):
     event_type: str
     needs_station = True
@@ -830,9 +1006,9 @@ UNSUPPORTED = (
 
 FAULTS: dict[str, Fault] = {
     fault.spec.name: fault
-    for fault in (NoFault(), ProcessOutage(), ProcessFreeze(), CpuPressure(), SqliteWriteLock(), DatabaseLatency(),
-                  SimDown(), SimChangeover(), SimMicroStops(), SimCounterReset(), SimScrapBurst(), SimStarve(),
-                  SimBlock(), SimDisconnect())
+    for fault in (NoFault(), ProcessOutage(), ProcessFreeze(), CpuPressure(), ResourceLimit(), SqliteWriteLock(),
+                  DatabaseLatency(), SimDown(), SimChangeover(), SimMicroStops(), SimCounterReset(), SimScrapBurst(),
+                  SimStarve(), SimBlock(), SimDisconnect())
 }
 UNSUPPORTED_BY_NAME: dict[str, FaultSpec] = {spec.name: spec for spec in UNSUPPORTED}
 

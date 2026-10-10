@@ -73,9 +73,24 @@ def build_server(root: Path | None = None) -> MCPServer:
     # ------------------------------------------------------------ discovery
 
     @tool(READ)
-    def list_fault_types() -> dict[str, Any]:
-        """Every fault type with its parameters and bounds. Unsupported types say why."""
-        return {"fault_types": _plain(api.discover_fault_types())}
+    def list_fault_types(name: str | None = None) -> dict[str, Any]:
+        """Every fault type with its parameters and bounds; unsupported types say why. Pass name for one fault's
+        full detail: expected effects, cleanup, recovery criteria and preconditions."""
+        faults = api.discover_fault_types()
+        if name is not None:
+            match = [f for f in faults if f["name"] == name]
+            if not match:
+                raise ToolError(f"unknown fault type {name!r}; call list_fault_types without a name")
+            return {"fault_types": _plain(match)}
+        # Compact by default so the whole catalogue fits in one agent tool result.
+        compact = [{"name": f["name"], "layer": f["layer"], "supported": f["supported"], "summary": f["summary"],
+                    "unsupported_reason": f["unsupported_reason"], "target_keys": f["target_keys"],
+                    "parameters": [{k: p[k] for k in ("name", "type", "minimum", "maximum", "default", "required",
+                                                      "choices") if p[k] not in (None, False)}
+                                   for p in f["parameters"]]}
+                   for f in faults]
+        return {"fault_types": _plain(compact),
+                "note": "call list_fault_types with name for one fault's effects, cleanup and recovery criteria"}
 
     @tool(READ)
     def list_targets() -> dict[str, Any]:

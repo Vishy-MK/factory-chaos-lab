@@ -18,6 +18,10 @@ its CLOCK_MONOTONIC deadline (shared by every process on the host) is in the fut
 HARD_MAX_WINDOW_S away. Expiry needs nobody: if the controller and watchdog both die, the delay stops by itself.
 A statement already sleeping when the window ends finishes its sleep, so the overrun is at most one delay.
 
+How it shows: while a delay is active the process is named `cl:delay/<component>` (e.g. `cl:delay/api`) in htop
+and ps, and goes back to its own name (`bottling/api`) when the window ends. Only /proc/self/comm changes; the lab
+finds components by command line and environment, which stay as they were.
+
 What it measures: per process, cumulative counts, errors, "database is locked" errors, injected delay, and
 histograms of observed duration (driver time plus injected delay) and driver time alone, written atomically to
 `<hook dir>/stats-<pid>.json`. The lab reads those files; the plant never reads them.
@@ -47,6 +51,8 @@ FLUSH_INTERVAL_S = 0.5
 #: Upper bounds of the histogram buckets in milliseconds; one more bucket counts everything above the last bound.
 BUCKETS_MS = (1, 2, 5, 10, 25, 50, 100, 150, 200, 250, 300, 400, 500, 750, 1000, 2000, 5000)
 KINDS = ("read", "write", "transaction", "other")
+#: Short component names that fit /proc/<pid>/comm (15 bytes) after "cl:delay/".
+SHORT_NAMES = {"run-api": "api", "run-opc-agent": "opcagt", "run-operations": "floor", "run-opc-sim": "opcsim"}
 _WRITES = {"INSERT", "UPDATE", "DELETE", "REPLACE", "UPSERT"}
 _TRANSACTION = {"BEGIN", "COMMIT", "ROLLBACK", "SAVEPOINT", "RELEASE", "END"}
 
@@ -189,6 +195,23 @@ def remove_dead_stats(directory: str) -> list[int]:
     return removed
 
 
+def _read_comm() -> str | None:
+    try:
+        with open("/proc/self/comm", encoding="utf-8") as handle:
+            return handle.read().strip() or None
+    except OSError:
+        return None
+
+
+def _write_comm(name: str) -> None:
+    # /proc/self is the thread group leader, so this renames the process from any thread.
+    try:
+        with open("/proc/self/comm", "w", encoding="utf-8") as handle:
+            handle.write(name[:15])
+    except OSError:
+        pass
+
+
 def _pid_alive(pid) -> bool:
     if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
         return False
@@ -226,6 +249,8 @@ class Hook:
         self._dirty = True
         self._last_flush = 0.0
         self._stop = threading.Event()
+        self._base_name = _read_comm()
+        self._label = self._base_name
         self.counters = {
             "statements": {kind: 0 for kind in KINDS}, "statements_total": 0, "errors": 0, "lock_errors": 0,
             "observed_ms_total": 0.0, "db_ms_total": 0.0,
@@ -247,8 +272,17 @@ class Hook:
         if token is None or delay_ms is None or now >= expires:
             if token is not None and now >= expires:
                 self._control_view = {"active": False, "problem": "activation expired", "token": token}
+            self._show(False)
             return 0.0, None
+        self._show(True)
         return delay_ms / 1000.0, token
+
+    def _show(self, active: bool) -> None:
+        """Name the process cl:delay/<component> in htop while the delay is active, its own name otherwise."""
+        label = f"cl:delay/{SHORT_NAMES.get(self.component, self.component)}"[:15] if active else self._base_name
+        if label and label != self._label:
+            self._label = label
+            _write_comm(label)
 
     def _refresh_control(self, now: float) -> None:
         path = control_path(self.directory)
@@ -397,6 +431,7 @@ class Hook:
 
     def stop_flusher(self) -> None:
         self._stop.set()
+        self._show(False)
 
 
 _LISTENERS = ("before_cursor_execute", "after_cursor_execute", "handle_error")

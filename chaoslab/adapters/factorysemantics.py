@@ -268,17 +268,24 @@ class FactorySemanticsAdapter:
     def pid_file(self) -> Path:
         return self.settings.data_dir / f"{self.name}.pids"
 
-    def spawn_component(self, component: str) -> int:
+    def spawn_component(self, component: str, scope_unit: str | None = None) -> int:
+        """Start a component with its original configuration; with scope_unit, inside that lab cgroup scope."""
         if component not in self._components:
             raise PlantError(f"component {component!r} is not in the allowlist")
         if component in self.find_components():
             return self.find_components()[component].pid
         env = self.plant_environment()
+        command = self.component_command(component)
+        if scope_unit:
+            from chaoslab.chaos import cgroups
+
+            # systemd-run --scope execs the command itself, so the pid below is the component's.
+            command = cgroups.scope_command(scope_unit, command)
         self.settings.log_dir.mkdir(parents=True, exist_ok=True)
         log_path = self.settings.log_dir / f"component-{component}.log"
         with log_path.open("ab") as log:
             process = subprocess.Popen(
-                self.component_command(component), cwd=self.settings.work_dir, env=env,
+                command, cwd=self.settings.work_dir, env=env,
                 stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
             )
         self._register_pid(process.pid, replacing=component)
