@@ -296,5 +296,5 @@ def test_the_approval_prompt_works_on_a_real_terminal(typed, expected):
             read_for(0.1)
     finally:
         os.waitpid(pid, 0)
-    assert b"APPROVAL NEEDED" in output
+    assert b"Agent requests fault injection: run_experiment api-process-outage-10s" in output
     assert f"RESULT {expected}".encode() in output

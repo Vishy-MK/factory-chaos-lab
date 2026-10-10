@@ -148,7 +148,7 @@ disappears and comes back with a new PID, a frozen one shows state `T`, the CPU 
 | `bottling/api`, `/opcsim`, `/opcagt`, `/floor`, `/logs` | the MES components of the lab plant | no |
 | `cl:experiment` | the experiment runner | `[baseline]`, `[fault_active step 1]`, `[recovering]`... |
 | `cl:watchdog` | the watchdog guarding a run | which run |
-| `cl:injector`, `cl:analyst` | an agent | round, tool and experiment; `WAITING FOR APPROVAL` |
+| `cl:injector`, `cl:analyst` | an agent | round, tool and experiment; `waiting for approval` |
 | `cl:fault:cpu`, `cl:fault:dblock` | fault helpers | no |
 | `cl:exporter`, `cl:mcp` | the exporter, the MCP server | no |
 
