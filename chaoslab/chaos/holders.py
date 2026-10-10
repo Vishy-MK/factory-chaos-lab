@@ -7,6 +7,8 @@ import sqlite3
 import sys
 import time
 
+from chaoslab import proctitle
+
 HARD_LIMIT_S = 120
 
 
@@ -74,6 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     lock.add_argument("--db", required=True)
     lock.add_argument("--seconds", type=int, required=True)
     args = parser.parse_args(argv)
+    proctitle.set_name("cl:fault:cpu" if args.kind == "cpu_burn" else "cl:fault:dblock")
     try:
         if args.kind == "cpu_burn":
             return cpu_burn(args.seconds, args.percent, args.cpu)

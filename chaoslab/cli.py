@@ -205,6 +205,9 @@ def _summary_text(result: dict) -> str:
 
 
 def cmd_run(args) -> int:
+    from chaoslab import proctitle
+
+    proctitle.enable(experiments=True)
     api = _api(args.root)
     try:
         experiment = model.load_file(Path(args.file))
@@ -229,6 +232,10 @@ def _exit_code(result: dict) -> int:
 
 
 def cmd_execute(args) -> int:
+    from chaoslab import proctitle
+
+    proctitle.enable(experiments=True)
+    proctitle.experiment(args.run_id, "starting")
     api = _api(args.root)
     result = api.execute_prepared(Path(args.file), args.run_id)
     return _exit_code(result)
@@ -371,8 +378,10 @@ def cmd_export(args) -> int:
 
 
 def cmd_exporter(args) -> int:
+    from chaoslab import proctitle
     from chaoslab.observability.exporter import serve
 
+    proctitle.set_name("cl:exporter")
     return serve(Path(args.root) if args.root else None)
 
 
@@ -404,18 +413,22 @@ def cmd_workload(args) -> int:
 
 
 def cmd_mcp(args) -> int:
+    from chaoslab import proctitle
     from chaoslab.mcp_server import main as serve
 
+    proctitle.set_name("cl:mcp")
     serve(Path(args.root) if args.root else None)
     return EXIT_OK
 
 
 def cmd_agent(args) -> int:
+    from chaoslab import proctitle
     from chaoslab.agents import commands
     from chaoslab.agents.llm import LLMError
     from chaoslab.agents.runtime import approve_all, ask_terminal
 
     root = Path(args.root) if args.root else None
+    proctitle.enable()
     try:
         if args.agent_command == "inject":
             code, payload = commands.inject(root, args.experiment, approve_all if args.approve else ask_terminal,

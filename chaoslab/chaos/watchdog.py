@@ -7,7 +7,7 @@ import sys
 import time
 from pathlib import Path
 
-from chaoslab import settings as settings_module
+from chaoslab import proctitle, settings as settings_module
 from chaoslab.audit import AuditLog, Lease, _pid_alive
 from chaoslab.chaos.cleanup import cleanup_records
 from chaoslab.settings import PACKAGE_ROOT
@@ -60,6 +60,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", required=True)
     parser.add_argument("--experiment-id")
     args = parser.parse_args(argv)
+    proctitle.enable()
+    proctitle.set_title(f"cl:watchdog guarding {args.experiment_id or 'the active experiment'}", "cl:watchdog")
     return run(Path(args.root), experiment_id=args.experiment_id)
 
 

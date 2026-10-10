@@ -25,6 +25,7 @@ from typing import Any, Callable
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
+from chaoslab import proctitle
 from chaoslab.agents.llm import ChatClient
 
 RESULT_LIMIT = 12000
@@ -145,17 +146,21 @@ class Agent:
                                           {"role": "user", "content": task}]
         for round_number in range(1, self.role.max_rounds + 1):
             run.rounds = round_number
+            provider = getattr(getattr(self.llm, "config", None), "provider", "the model")
+            proctitle.agent(self.role.name, f"round {round_number} | asking {provider}")
             reply = await self.llm.chat(messages, specs)
             messages.append(reply.as_message())
             if reply.content:
                 run.transcript.append({"round": round_number, "say": reply.content})
             if not reply.tool_calls:
+                proctitle.agent(self.role.name, f"done after {round_number} rounds")
                 run.final_text = reply.content
                 run.output = extract_json(reply.content)
                 return run
             for call in reply.tool_calls:
                 result = await self._dispatch(call.name, call.arguments, round_number, run)
                 messages.append({"role": "tool", "tool_call_id": call.id, "name": call.name, "content": result})
+        proctitle.agent(self.role.name, f"stopped after {self.role.max_rounds} rounds")
         run.stopped = "max_rounds"
         self.progress(f"[{self.role.name}] stopped after {self.role.max_rounds} rounds without a final answer")
         return run
@@ -170,16 +175,31 @@ class Agent:
             run.transcript.append({"round": round_number, "tool": name, "arguments": raw_arguments, "result": result})
             return result
         self.progress(f"[{self.role.name}] {name} {json.dumps(arguments, default=str)[:160]}")
+        subject = _subject(arguments)
         if name not in self.role.tools:
             result = f"ERROR: {name} is not one of this agent's tools"
-        elif needs_approval(name, arguments) and not self.approver(name, arguments):
+        elif needs_approval(name, arguments) and not self._approved(name, arguments, round_number, subject):
             result = "DENIED: the operator did not approve this fault injection. Do not retry it; report and stop."
         else:
+            proctitle.agent(self.role.name, f"round {round_number} | {name} {subject}".rstrip())
             started = time.monotonic()
             result = await self.toolbox.call(name, arguments)
             self.progress(f"[{self.role.name}]   -> {result[:160]}  ({time.monotonic() - started:.1f}s)")
         run.transcript.append({"round": round_number, "tool": name, "arguments": arguments, "result": result})
         return result
+
+    def _approved(self, name: str, arguments: dict, round_number: int, subject: str) -> bool:
+        proctitle.agent(self.role.name, f"round {round_number} | WAITING FOR APPROVAL to inject {subject}")
+        approved = self.approver(name, arguments)
+        proctitle.agent(self.role.name, f"round {round_number} | {'approved' if approved else 'denied'} {subject}")
+        return approved
+
+
+def _subject(arguments: dict) -> str:
+    """What a tool call is about, for the process title: an experiment name or id."""
+    definition = arguments.get("definition")
+    return str(arguments.get("name") or arguments.get("experiment_id")
+               or (definition.get("name") if isinstance(definition, dict) else "") or "")
 
 
 def save_transcript(directory: Path, run: AgentRun) -> Path:

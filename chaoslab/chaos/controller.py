@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from chaoslab import __version__ as lab_version
-from chaoslab import model, resources, settings as settings_module
+from chaoslab import model, proctitle, resources, settings as settings_module
 from chaoslab.adapters.factorysemantics import FactorySemanticsAdapter
 from chaoslab.adapters.logs import LogCollector
 from chaoslab.adapters.metrics import HostSampler, MetricsAdapter, Sampler
@@ -40,6 +40,7 @@ class StateTracker:
         self.state = new_state
         self.history.append({"state": new_state.value, "at": now_iso(), **details})
         self.audit.record(self.experiment_id, "state", state=new_state.value, **details)
+        proctitle.experiment(self.experiment_id, new_state.value, details.get("step"))
         if self.lease is not None and new_state not in model.TERMINAL:
             self.lease.update(state=new_state.value)
 

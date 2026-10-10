@@ -134,6 +134,31 @@ terminal the answer is no); the safety policy still decides what runs. Transcrip
 | `CHAOSLAB_LLM_MODEL` | `ministral-14b-latest` for Mistral (the free tier allows no larger model); required for Groq | model name |
 | `CHAOSLAB_LLM_BASE_URL` | the provider's | another OpenAI-compatible endpoint |
 
+## Watching it in htop
+
+```bash
+./scripts/watch.sh      # htop, tree view, only the plant and the lab
+```
+
+Every process the lab runs has a name, so a fault is visible at the OS level as it happens: a killed component
+disappears and comes back with a new PID, a frozen one shows state `T`, the CPU burner sits at its percentage.
+
+| Shown as | Process | Live state in the title |
+|---|---|---|
+| `bottling/api`, `/opcsim`, `/opcagt`, `/floor`, `/logs` | the MES components of the lab plant | no |
+| `cl:experiment` | the experiment runner | `[baseline]`, `[fault_active step 1]`, `[recovering]`... |
+| `cl:watchdog` | the watchdog guarding a run | which run |
+| `cl:injector`, `cl:analyst` | an agent | round, tool and experiment; `WAITING FOR APPROVAL` |
+| `cl:fault:cpu`, `cl:fault:dblock` | fault helpers | no |
+| `cl:exporter`, `cl:mcp` | the exporter, the MCP server | no |
+
+The MES is not modified: the lab starts the plant with `chaoslab/plant_names` on `PYTHONPATH`, whose
+`sitecustomize.py` sets each component's process name. Plant components and fault helpers get only a process name
+(`/proc/<pid>/comm`): the lab finds them by their command line and environment, which stay untouched. Full titles
+are only for processes nothing looks up. Restart the plant once (`scripts/stop.sh`, `scripts/start.sh`) for its
+components to pick up their names. `scripts/watch.sh` uses its own htop configuration
+(`observability/htop/htoprc`) and leaves yours alone.
+
 ## Looking at results
 
 ```bash

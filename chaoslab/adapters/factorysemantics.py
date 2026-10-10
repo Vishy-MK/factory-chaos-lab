@@ -29,6 +29,17 @@ class PlantError(Exception):
     pass
 
 
+# Its sitecustomize names each MES component "<plant>/<component>" in htop; see that file.
+PLANT_NAMES_DIR = Path(__file__).resolve().parents[1] / "plant_names"
+
+
+def with_plant_names(env: dict[str, str]) -> dict[str, str]:
+    paths = [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p]
+    if str(PLANT_NAMES_DIR) not in paths:
+        env["PYTHONPATH"] = os.pathsep.join([str(PLANT_NAMES_DIR), *paths])
+    return env
+
+
 class FactorySemanticsAdapter:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -182,7 +193,7 @@ class FactorySemanticsAdapter:
         speed = float(self.settings.lab["plant"]["sim_speed"])
         env = plants_mod.plant_env(self.name, registry[self.name], work, speed)
         env.update(self.upstream_config_overrides())
-        return env
+        return with_plant_names(env)
 
     def upstream_config_overrides(self) -> dict[str, str]:
         config_dir = self.settings.upstream_dir / "config"
@@ -196,7 +207,7 @@ class FactorySemanticsAdapter:
         env = dict(os.environ)
         env["FSMES_PLANT_REGISTRY"] = str(self.settings.fleet_file)
         env.update(self.upstream_config_overrides())
-        return env
+        return with_plant_names(env)
 
     def _run_fsmes(self, arguments: list[str], log_name: str, timeout: float) -> int:
         self.settings.log_dir.mkdir(parents=True, exist_ok=True)
