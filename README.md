@@ -131,7 +131,7 @@ terminal the answer is no); the safety policy still decides what runs. Transcrip
 |---|---|---|
 | `CHAOSLAB_LLM_PROVIDER` | `mistral` | `mistral` or `groq` |
 | `MISTRAL_API_KEY` / `GROQ_API_KEY` | none | key for the chosen provider |
-| `CHAOSLAB_LLM_MODEL` | `mistral-large-latest` for Mistral; required for Groq | model name |
+| `CHAOSLAB_LLM_MODEL` | `ministral-14b-latest` for Mistral (the free tier allows no larger model); required for Groq | model name |
 | `CHAOSLAB_LLM_BASE_URL` | the provider's | another OpenAI-compatible endpoint |
 
 ## Looking at results

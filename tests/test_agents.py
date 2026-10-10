@@ -198,7 +198,7 @@ def test_the_client_reports_a_refused_request():
 
 
 def test_config_defaults_to_mistral_and_explains_what_is_missing():
-    assert LLMConfig.from_env({"MISTRAL_API_KEY": "k"}).model == "mistral-large-latest"
+    assert LLMConfig.from_env({"MISTRAL_API_KEY": "k"}).model == "ministral-14b-latest"
     with pytest.raises(LLMError, match="MISTRAL_API_KEY is not set"):
         LLMConfig.from_env({})
     with pytest.raises(LLMError, match="set CHAOSLAB_LLM_MODEL"):
@@ -234,3 +234,15 @@ def test_inject_maps_a_denied_run_to_the_rejected_exit_code(lab_root, settings):
     assert code == commands.EXIT_REJECTED
     assert payload["output"]["outcome"] == "denied"
     assert submissions(settings) == []
+
+
+def test_analyze_does_not_repeat_a_baseline_it_never_compared(lab_root, settings):
+    run_id = store_run(settings)
+    baseline = store_run(settings, "20261010T000000Z-baseline-observe-000000")
+    claimed = {"experiment_id": run_id, "verdict": "recovered", "baseline_compared": baseline}
+    _, payload = commands.analyze(lab_root, run_id, llm=ScriptedLLM(answer(dict(claimed))))
+    assert payload["output"]["baseline_compared"] is None
+    assert payload["output"]["baseline_compared_unverified"] == baseline
+    _, payload = commands.analyze(lab_root, run_id, llm=ScriptedLLM(
+        calls(("compare_runs", {"first": baseline, "second": run_id})), answer(dict(claimed))))
+    assert payload["output"]["baseline_compared"] == baseline

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -20,6 +21,7 @@ REFUSED_OUTCOMES = {"rejected", "denied", "plant_not_ready", "preflight_failed"}
 
 def _agent(root: Path | None, role, approver: Approver, llm: ChatClient | None) -> Agent:
     server = build_server(root)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     return Agent(role, llm or ChatClient(LLMConfig.from_env()), ToolBox(server, role.tools), approver,
                  progress=stderr_progress)
 
@@ -47,6 +49,12 @@ def analyze(root: Path | None, experiment_id: str, llm: ChatClient | None = None
     resolved = store.resolve(experiment_id)
     run = asyncio.run(_agent(root, ANALYST, lambda *_: False, llm).run(
         f"Analyse the finished experiment {resolved!r}."))
+    if run.output is not None and run.output.get("baseline_compared"):
+        compared = [c["arguments"] for c in run.transcript if c.get("tool") == "compare_runs"]
+        if not any(run.output["baseline_compared"] in (a.get("first"), a.get("second")) for a in compared):
+            # A model can name a baseline it never compared against; the record says so rather than repeat it.
+            run.output["baseline_compared_unverified"] = run.output.pop("baseline_compared")
+            run.output["baseline_compared"] = None
     payload = _finish(root, run)
     if run.output is not None:
         # Next to the lab's own record, never over it.

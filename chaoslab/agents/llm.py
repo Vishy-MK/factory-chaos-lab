@@ -16,8 +16,10 @@ from typing import Any
 import httpx
 
 PROVIDERS = {
+    # The free tier gives larger Mistral models a quota of zero requests a minute (checked 2026-10-10);
+    # ministral-14b is the strongest one it serves. A paid key can name a larger one in CHAOSLAB_LLM_MODEL.
     "mistral": {"base_url": "https://api.mistral.ai/v1", "key_env": "MISTRAL_API_KEY",
-                "model": "mistral-large-latest"},
+                "model": "ministral-14b-latest"},
     # No default model: Groq's catalogue moves quickly, so the caller names one in CHAOSLAB_LLM_MODEL.
     "groq": {"base_url": "https://api.groq.com/openai/v1", "key_env": "GROQ_API_KEY", "model": None},
 }
