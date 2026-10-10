@@ -1,0 +1,21 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+gunicorn==23.0.0
+onnxruntime==1.20.1
+numpy==2.2.1
+psutil==6.1.1
+pydantic-settings==2.7.1
+python-multipart==0.0.20
+pymupdf==1.25.1
+python-docx==1.1.2
+sentence-transformers==3.3.1
+faiss-cpu==1.10.0
+httpx==0.28.1
+filelock==3.16.1
+langchain-core==0.3.86
+langchain-text-splitters==0.3.11
+langchain-openai==0.3.35
+langgraph==0.2.76
+# Pin the Sentence Transformers runtime; install the CPU torch wheel first.
+torch==2.5.1
+transformers==4.46.3

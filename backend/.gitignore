@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+*.pyc
+.env
+
+# RAG runtime data and local test artifacts
+/data/
+.env.*
+!.env.example
+.pytest_cache/
+.coverage
+htmlcov/
