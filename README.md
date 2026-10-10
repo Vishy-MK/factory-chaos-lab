@@ -85,6 +85,26 @@ ephemeral plant and take about two minutes. Add `--dry-run` to validate and run 
 
 Details, parameters and what each experiment has actually shown are in `docs/EXPERIMENTS.md`.
 
+## MCP tools for agents
+
+```bash
+.venv/bin/python -m chaoslab mcp       # stdio; .mcp.json registers it for Claude Code in this directory
+```
+
+The same contract as `chaoslab/api.py`, as 20 MCP tools. Only four change anything and are marked destructive:
+`run_experiment`, `emergency_stop`, `plant_start`, `plant_stop`. The rest read.
+
+| Group | Tools |
+|---|---|
+| discovery | `list_fault_types`, `list_targets`, `get_safety_policy`, `list_experiments`, `get_experiment` |
+| proposing and running | `validate_experiment`, `run_experiment` (definition or stored name; `dry_run`), `experiment_status`, `emergency_stop` |
+| results | `list_runs`, `get_result`, `get_metrics`, `get_logs`, `get_scoring`, `get_recovery`, `compare_runs` |
+| the plant | `plant_status`, `check_resources`, `plant_start`, `plant_stop` |
+
+`run_experiment` goes through the same policy, lease and cleanup as the CLI and returns an `experiment_id` at once;
+poll `experiment_status`. A rejected proposal returns its reasons; an unknown run id or definition is a tool error
+with its reason.
+
 ## Looking at results
 
 ```bash
@@ -162,4 +182,4 @@ Stop the plant, delete `runtime/`, run `scripts/setup.sh`. `results/` and `facto
   availability figures are `null` in short runs. That is reported, not filled in.
 - The lab's own CPU/RSS figures depend on a recorded line replayed from memory: restarting the OPC server restarts
   the replay from the start of the recording.
-- Not implemented: HTTP interface for the AI contract, Loki, alerting, PostgreSQL deployment, multi-plant faults.
+- Not implemented: HTTP interface for the AI contract (MCP over stdio exists), Loki, alerting, PostgreSQL deployment, multi-plant faults.

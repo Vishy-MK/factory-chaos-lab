@@ -178,3 +178,10 @@ class Lifecycle:
             "host": host.as_dict(),
             "exporter_pid": self.exporter_pid(),
         }
+
+
+def is_healthy(status: dict) -> bool:
+    machines = status["machines"] or {}
+    return bool(status["api_up"] and machines.get("machines")
+                and machines.get("connected") == machines.get("machines")
+                and all(c["alive"] for c in status["components"].values()))

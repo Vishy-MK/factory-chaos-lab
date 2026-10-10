@@ -106,12 +106,12 @@ def cmd_status(args) -> int:
 
 
 def cmd_health(args) -> int:
+    from chaoslab.lifecycle import is_healthy
+
     life = _lifecycle(args.root)
     status = life.status()
     machines = status["machines"] or {}
-    healthy = bool(status["api_up"] and machines.get("machines")
-                   and machines.get("connected") == machines.get("machines")
-                   and all(c["alive"] for c in status["components"].values()))
+    healthy = is_healthy(status)
     _emit({"healthy": healthy, **status}, args.json,
           "HEALTHY" if healthy else "UNHEALTHY: " + json.dumps(
               {"api_up": status["api_up"], "machines": machines,
@@ -321,15 +321,13 @@ def cmd_resources(args) -> int:
     from chaoslab import resources, settings as settings_module
 
     settings = settings_module.load(Path(args.root) if args.root else None)
-    gate = resources.ResourceGate(settings.policy["resources"])
-    allowed, reasons, snapshot = gate.check()
-    payload = {"experiments_allowed": allowed, "reasons": reasons, "host": snapshot.as_dict(),
-               "threshold_available_mb": settings.policy["resources"]["min_available_memory_mb"]}
+    payload = resources.gate_report(settings.policy)
+    allowed, reasons, host = payload["experiments_allowed"], payload["reasons"], payload["host"]
     life = _lifecycle(args.root)
     payload["plant_rss_mb_total"] = life.status()["plant_rss_mb_total"]
     _emit(payload, args.json, (
-        f"available memory {snapshot.available_mb:.0f} MB (threshold "
-        f"{payload['threshold_available_mb']} MB), CPU {snapshot.cpu_percent:.0f}%, "
+        f"available memory {host['available_memory_mb']:.0f} MB (threshold "
+        f"{payload['threshold_available_mb']} MB), CPU {host['cpu_percent']:.0f}%, "
         f"plant RSS {payload['plant_rss_mb_total']} MB: "
         + ("experiments allowed" if allowed else "experiments refused: " + "; ".join(reasons))))
     return EXIT_OK if allowed else EXIT_FAILED
@@ -404,6 +402,13 @@ def cmd_workload(args) -> int:
     return EXIT_OK
 
 
+
+def cmd_mcp(args) -> int:
+    from chaoslab.mcp_server import main as serve
+
+    serve(Path(args.root) if args.root else None)
+    return EXIT_OK
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="chaoslab", description="FactorySemantics chaos laboratory controller")
     parser.add_argument("--root", help="lab root directory (default: the checkout containing this package)")
@@ -460,6 +465,7 @@ def build_parser() -> argparse.ArgumentParser:
     export.set_defaults(func=cmd_export)
     sub.add_parser("exporter", help="run the Prometheus exporter in the foreground").set_defaults(
         func=cmd_exporter)
+    sub.add_parser("mcp", help="serve the lab as MCP tools over stdio").set_defaults(func=cmd_mcp)
     workload = sub.add_parser("workload", help="run a bounded workload against the lab plant")
     workload.add_argument("--profile", default="baseline")
     workload.add_argument("--seconds", type=int, default=30)

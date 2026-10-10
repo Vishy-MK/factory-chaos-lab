@@ -72,5 +72,11 @@ class ResourceGate:
         return (not reasons, reasons, snapshot)
 
 
+
+def gate_report(policy: dict) -> dict:
+    allowed, reasons, snapshot = ResourceGate(policy["resources"]).check()
+    return {"experiments_allowed": allowed, "reasons": reasons, "host": snapshot.as_dict(),
+            "threshold_available_mb": policy["resources"]["min_available_memory_mb"]}
+
 def monotonic() -> float:
     return time.monotonic()
