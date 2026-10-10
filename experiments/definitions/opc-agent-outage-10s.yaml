@@ -1,0 +1,20 @@
+name: opc-agent-outage-10s
+description: Kill the OPC agent for 10 seconds so no machine data is booked, then restart it.
+category: infrastructure
+target:
+  plant: bottling
+  component: opc-agent
+fault:
+  type: process_outage
+  parameters:
+    duration_s: 10
+    signal: KILL
+baseline_s: 20
+workload: baseline
+expected_measurements:
+  - tag_ingest_per_second
+  - machines_connected
+cleanup: restart the opc-agent component
+recovery:
+  timeout_s: 90
+scoring: none

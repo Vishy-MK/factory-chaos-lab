@@ -1,0 +1,24 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 15s
+  external_labels:
+    lab: factory-chaos-lab
+
+rule_files:
+  - rules/*.yml
+
+scrape_configs:
+  - job_name: chaoslab
+    scrape_interval: 5s
+    scrape_timeout: 4s
+    static_configs:
+      - targets: ["127.0.0.1:9108"]
+
+  - job_name: factorysemantics
+    metrics_path: /metrics
+    scrape_interval: 10s
+    scrape_timeout: 5s
+    static_configs:
+      - targets: ["127.0.0.1:8010"]
+        labels:
+          component: api

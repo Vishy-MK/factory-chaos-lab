@@ -1,0 +1,35 @@
+hosts:
+  - 127.0.0.1
+
+plants:
+  bottling:
+    api_port: 8010
+    opc_port: 4841
+    components:
+      api:
+        command: run-api
+      opc-sim:
+        command: run-opc-sim
+        arguments:
+          - --replay
+      opc-agent:
+        command: run-opc-agent
+      floor:
+        command: run-operations
+    database: sqlite
+
+fault_targets:
+  process_outage:
+    - api
+    - opc-sim
+    - opc-agent
+    - floor
+  process_freeze:
+    - api
+    - opc-sim
+    - opc-agent
+    - floor
+  cpu_pressure:
+    - api
+  sqlite_write_lock:
+    - database

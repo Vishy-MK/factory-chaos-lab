@@ -1,0 +1,23 @@
+name: sim-machine-breakdown-rd
+description: Script a two-minute breakdown of the rotary denester and check detection, starve and block propagation and recovery.
+category: application
+target:
+  plant: bottling
+  station: RD
+fault:
+  type: sim_down
+  parameters:
+    start_s: 600
+    end_s: 720
+application:
+  duration_s: 1500
+  speed: 20
+  seed: 42
+  measure:
+    - booking
+    - downtime
+    - oee
+expected_measurements:
+  - downtime
+  - booking
+scoring: fsmes_lab_run

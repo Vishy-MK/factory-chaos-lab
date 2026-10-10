@@ -1,0 +1,7 @@
+description: Low-rate read-only traffic through documented API endpoints, in a fixed order.
+requests_per_second: 0.5
+operations:
+  - order_summary
+  - equipment_states
+  - orders_kpi
+  - connections

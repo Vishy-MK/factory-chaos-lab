@@ -1,0 +1,23 @@
+name: sim-opc-disconnect
+description: Script a loss of the OPC UA machine layer while the line keeps running and check unobserved time is reported as unknown.
+category: application
+target:
+  plant: bottling
+fault:
+  type: sim_disconnect
+  parameters:
+    start_s: 360
+    end_s: 600
+application:
+  duration_s: 1500
+  speed: 20
+  seed: 42
+  measure:
+    - booking
+    - connection
+    - downtime
+    - oee
+expected_measurements:
+  - connection
+  - booking
+scoring: fsmes_lab_run

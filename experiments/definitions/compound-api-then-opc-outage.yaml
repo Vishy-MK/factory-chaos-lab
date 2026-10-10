@@ -1,0 +1,26 @@
+name: compound-api-then-opc-outage
+description: Two sequential faults with recovery verified between them, API outage and then OPC server outage. At most one fault is active at a time.
+category: infrastructure
+steps:
+  - target:
+      plant: bottling
+      component: api
+    fault:
+      type: process_outage
+      parameters:
+        duration_s: 8
+  - target:
+      plant: bottling
+      component: opc-sim
+    fault:
+      type: process_outage
+      parameters:
+        duration_s: 8
+baseline_s: 20
+workload: baseline
+expected_measurements:
+  - api_success_ratio
+  - machines_connected
+recovery:
+  timeout_s: 90
+scoring: none

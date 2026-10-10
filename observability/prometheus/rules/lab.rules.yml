@@ -1,0 +1,21 @@
+groups:
+  - name: chaoslab
+    rules:
+      - record: chaoslab:tag_ingest_per_second:rate1m
+        expr: rate(mes_tag_values_max_id[1m])
+      - record: chaoslab:audit_entries_per_second:rate1m
+        expr: rate(mes_audit_entries_max_id[1m])
+      - alert: ChaoslabPlantDown
+        expr: chaoslab_plant_up == 0
+        for: 15s
+        labels:
+          severity: info
+        annotations:
+          summary: The lab plant API is not answering
+      - alert: ChaoslabIngestionStalled
+        expr: rate(mes_tag_values_max_id[30s]) == 0
+        for: 20s
+        labels:
+          severity: info
+        annotations:
+          summary: No tag values have been stored for 20 seconds

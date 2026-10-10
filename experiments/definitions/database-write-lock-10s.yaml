@@ -1,0 +1,23 @@
+name: database-write-lock-10s
+description: Hold the plant database write lock for 10 seconds so agent and floor writes stall, then roll back.
+category: infrastructure
+target:
+  plant: bottling
+  resource: database
+fault:
+  type: sqlite_write_lock
+  parameters:
+    duration_s: 10
+baseline_s: 20
+workload: baseline
+preconditions:
+  - database_present
+  - write_lock_free
+expected_measurements:
+  - tag_ingest_per_second
+  - api_success_ratio
+  - floor_seconds_since_check
+cleanup: terminate the lock holder; verify the write lock can be acquired
+recovery:
+  timeout_s: 60
+scoring: none

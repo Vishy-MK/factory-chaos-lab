@@ -1,0 +1,24 @@
+name: opc-server-outage-10s
+description: Kill the OPC UA replay server for 10 seconds so the agent loses every machine, then restart it.
+category: infrastructure
+target:
+  plant: bottling
+  component: opc-sim
+fault:
+  type: process_outage
+  parameters:
+    duration_s: 10
+    signal: KILL
+baseline_s: 20
+workload: baseline
+preconditions:
+  - plant_healthy
+  - opc_sim_running
+expected_measurements:
+  - machines_connected
+  - tag_ingest_per_second
+  - api_success_ratio
+cleanup: restart the opc-sim component; the replay restarts from the beginning of the recording
+recovery:
+  timeout_s: 90
+scoring: none

@@ -1,0 +1,22 @@
+name: sim-changeover
+description: Script a four-minute whole-line changeover and check it is a planned stop that is not booked as downtime.
+category: application
+target:
+  plant: bottling
+fault:
+  type: sim_changeover
+  parameters:
+    start_s: 600
+    end_s: 840
+application:
+  duration_s: 1500
+  speed: 20
+  seed: 42
+  measure:
+    - booking
+    - downtime
+    - oee
+expected_measurements:
+  - downtime
+  - oee
+scoring: fsmes_lab_run

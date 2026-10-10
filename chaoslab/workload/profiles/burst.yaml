@@ -1,0 +1,6 @@
+description: High-volume profile. Present so the policy validator demonstrably refuses it.
+requests_per_second: 50
+high_volume: true
+operations:
+  - order_summary
+  - equipment_states

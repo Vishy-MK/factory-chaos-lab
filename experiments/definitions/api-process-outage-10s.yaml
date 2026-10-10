@@ -1,0 +1,25 @@
+name: api-process-outage-10s
+description: Kill the API process, leave it down for 10 seconds, then restart it with its original configuration.
+category: infrastructure
+target:
+  plant: bottling
+  component: api
+fault:
+  type: process_outage
+  parameters:
+    duration_s: 10
+    signal: KILL
+baseline_s: 20
+workload: baseline
+preconditions:
+  - plant_healthy
+  - api_running
+expected_measurements:
+  - api_success_ratio
+  - authenticated_success_ratio
+  - tag_ingest_per_second
+  - floor_seconds_since_check
+cleanup: restart the api component using the plant environment and re-register its pid
+recovery:
+  timeout_s: 60
+scoring: none

@@ -1,0 +1,20 @@
+name: api-cpu-pressure-15s
+description: Pin the API to one CPU and contend for that CPU with a 60 percent duty-cycled busy loop for 15 seconds.
+category: infrastructure
+target:
+  plant: bottling
+  component: api
+fault:
+  type: cpu_pressure
+  parameters:
+    duration_s: 15
+    percent: 60
+baseline_s: 20
+workload: demonstration
+expected_measurements:
+  - api_latency_ms
+  - api_success_ratio
+cleanup: stop the burner and restore the original CPU affinity
+recovery:
+  timeout_s: 60
+scoring: none

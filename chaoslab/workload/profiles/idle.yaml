@@ -1,0 +1,3 @@
+description: No lab-originated traffic. The simulated floor and replay still run inside the plant.
+requests_per_second: 0
+operations: []

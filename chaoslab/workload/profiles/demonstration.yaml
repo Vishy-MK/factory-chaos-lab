@@ -1,0 +1,9 @@
+description: Bounded demonstration workload with heavier KPI reads, still read-only.
+requests_per_second: 2
+operations:
+  - order_summary
+  - equipment_states
+  - orders_kpi
+  - connections
+  - oee_fill
+  - downtime

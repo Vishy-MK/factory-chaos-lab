@@ -1,0 +1,21 @@
+name: sim-counter-reset-rd
+description: Script a PLC counter reset on the rotary denester and check the MES books nothing for the reset.
+category: application
+target:
+  plant: bottling
+  station: RD
+fault:
+  type: sim_counter_reset
+  parameters:
+    at_s: 900
+application:
+  duration_s: 1500
+  speed: 20
+  seed: 42
+  measure:
+    - booking
+    - downtime
+    - oee
+expected_measurements:
+  - booking
+scoring: fsmes_lab_run

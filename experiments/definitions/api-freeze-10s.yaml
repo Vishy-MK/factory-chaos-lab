@@ -1,0 +1,23 @@
+name: api-freeze-10s
+description: Suspend the API process with SIGSTOP for 10 seconds, then resume it. Requests hang rather than being refused.
+category: infrastructure
+target:
+  plant: bottling
+  component: api
+fault:
+  type: process_freeze
+  parameters:
+    duration_s: 10
+baseline_s: 20
+workload: baseline
+preconditions:
+  - plant_healthy
+  - api_running
+expected_measurements:
+  - api_success_ratio
+  - api_latency_ms
+  - floor_seconds_since_check
+cleanup: send SIGCONT to the suspended pid
+recovery:
+  timeout_s: 60
+scoring: none

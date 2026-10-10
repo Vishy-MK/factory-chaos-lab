@@ -1,0 +1,11 @@
+apiVersion: 1
+providers:
+  - name: factory-chaos-lab
+    orgId: 1
+    folder: Chaos Lab
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: __DASHBOARD_DIR__

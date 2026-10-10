@@ -1,0 +1,763 @@
+{
+  "experiment": "lost-connection",
+  "plan": "/home/vishy/factory-chaos-lab/factorysemantics-mes/labs/experiments/lost-connection.toml",
+  "product_version": "0.2.0",
+  "started_at": "2026-10-10T06:43:37.389170",
+  "finished_at": "2026-10-10T06:45:20.058002",
+  "wall_seconds": 102.7,
+  "speed": 20.0,
+  "seed": 42,
+  "measurements_asked_for": [
+    "booking",
+    "connection",
+    "downtime",
+    "oee"
+  ],
+  "plants_total": 1,
+  "plants_run": 1,
+  "measurements": {},
+  "note": "Nobody was watching for four minutes, and then for three. What to\nlook at first: no station may show a breakdown inside a disconnect window, and\nno screen may keep showing the state a machine was in when the link died.\n\nThen look at the booking table, because it carries a finding this run was not\nwritten to look for. The agent's counter baseline is rebuilt with the\nconnection, so the units the line counted while nobody was watching book\nnothing: every station comes out a few hundred below what the line made. It is\nnot double-counting and it is not invention - it is a silent shortfall, and it\nis a second question, written up in decision 0030 under what that record does\nnot solve.",
+  "plants": [
+    {
+      "plant": "bottling",
+      "label": "ACME Beverages / Kansas City \u2014 6-station bottling line",
+      "pack": "/home/vishy/factory-chaos-lab/runtime/probe-results/2026-10-10-lost-connection/packs/bottling",
+      "started_at": "2026-10-10T06:43:56.118049",
+      "collected_at": "2026-10-10T06:45:19.689847",
+      "line_json": "line/bottling.json",
+      "overlay": {},
+      "seed": 42,
+      "duration_line_seconds": 1500,
+      "speed": 20.0,
+      "replay_overlap_line_seconds": 171,
+      "wall_seconds_played": 83.6,
+      "pipeline": {
+        "interval_s": 0.5,
+        "replay_max_behind_s": 0.0,
+        "replay_sustainable_speed": null,
+        "agent_max_lag_s": 0.012,
+        "agent_max_lag_s_including_startup": 0.017,
+        "agent_warmup_s": 60.0,
+        "agent_max_backlog": 56,
+        "agent_busy_share": 0.056,
+        "agent_readings": 1369,
+        "sustained": true
+      },
+      "verdict_withheld": null,
+      "triage": {
+        "findings": [],
+        "note": "the local model did not answer"
+      },
+      "jev": {
+        "asked": false,
+        "note": "not asked (no MES_JEV_API_KEY in this environment)",
+        "comparison": {
+          "agree": null,
+          "qwen_findings": 0,
+          "qwen_worst": "none",
+          "line": "qwen: 0 finding(s), worst none. jev: not asked (no MES_JEV_API_KEY in this environment)."
+        }
+      },
+      "views_refused": {},
+      "measurements": {
+        "booking": {
+          "measurement": "booking",
+          "question": "did the MES book what the line made?",
+          "unknown_because": null,
+          "line_seconds": 1500,
+          "overlap_line_seconds": 171,
+          "speed": 20.0,
+          "stations_total": 6,
+          "stations_answered": 6,
+          "stations": [
+            {
+              "station": "LD",
+              "equipment": "LD01",
+              "truth_good": 2475,
+              "truth_scrap": 4,
+              "overlap_good": 312,
+              "expected_range": [
+                2475,
+                2787
+              ],
+              "mes_good": 2202,
+              "mes_scrap": 4,
+              "difference": -273,
+              "verdict": "booked 273 fewer than the line made"
+            },
+            {
+              "station": "RD",
+              "equipment": "RD01",
+              "truth_good": 2441,
+              "truth_scrap": 25,
+              "overlap_good": 303,
+              "expected_range": [
+                2441,
+                2744
+              ],
+              "mes_good": 2162,
+              "mes_scrap": 27,
+              "difference": -279,
+              "verdict": "booked 279 fewer than the line made"
+            },
+            {
+              "station": "Washer",
+              "equipment": "WASH01",
+              "truth_good": 2417,
+              "truth_scrap": 32,
+              "overlap_good": 306,
+              "expected_range": [
+                2417,
+                2723
+              ],
+              "mes_good": 2160,
+              "mes_scrap": 30,
+              "difference": -257,
+              "verdict": "booked 257 fewer than the line made"
+            },
+            {
+              "station": "QI",
+              "equipment": "QI01",
+              "truth_good": 2382,
+              "truth_scrap": 37,
+              "overlap_good": 308,
+              "expected_range": [
+                2382,
+                2690
+              ],
+              "mes_good": 2137,
+              "mes_scrap": 32,
+              "difference": -245,
+              "verdict": "booked 245 fewer than the line made"
+            },
+            {
+              "station": "Refill",
+              "equipment": "FILL01",
+              "truth_good": 2352,
+              "truth_scrap": 22,
+              "overlap_good": 295,
+              "expected_range": [
+                2352,
+                2647
+              ],
+              "mes_good": 2099,
+              "mes_scrap": 16,
+              "difference": -253,
+              "verdict": "booked 253 fewer than the line made"
+            },
+            {
+              "station": "Palletiser",
+              "equipment": "PAL01",
+              "truth_good": 2336,
+              "truth_scrap": 7,
+              "overlap_good": 289,
+              "expected_range": [
+                2336,
+                2625
+              ],
+              "mes_good": 2060,
+              "mes_scrap": 7,
+              "difference": -276,
+              "verdict": "booked 276 fewer than the line made"
+            }
+          ],
+          "line": {
+            "truth_good": 2336,
+            "expected_range": [
+              2336,
+              2625
+            ],
+            "mes_good_last_station": 2060,
+            "mes_good_all_stations": 12820
+          },
+          "orders": {
+            "tied_to_truth": true,
+            "tied_how": "the tag map says the line publishes its order on Line.OrderId and that 'WO-ACME-{value}' is how that value names an order here",
+            "why": null,
+            "truth_orders_total": 1,
+            "truth_good_by_order": {
+              "4711": 2336
+            },
+            "orders_tied": 1,
+            "mes_orders_total": 10,
+            "mes_orders": [
+              {
+                "code": "WO-ACME-4720",
+                "quantity": 16800.0,
+                "good": 0.0,
+                "scrap": 0.0,
+                "over": 0.0
+              },
+              {
+                "code": "WO-ACME-4719",
+                "quantity": 16800.0,
+                "good": 0.0,
+                "scrap": 0.0,
+                "over": 0.0
+              },
+              {
+                "code": "WO-ACME-4718",
+                "quantity": 15600.0,
+                "good": 0.0,
+                "scrap": 0.0,
+                "over": 0.0
+              },
+              {
+                "code": "WO-ACME-4717",
+                "quantity": 18000.0,
+                "good": 0.0,
+                "scrap": 0.0,
+                "over": 0.0
+              },
+              {
+                "code": "WO-ACME-4716",
+                "quantity": 19200.0,
+                "good": 0.0,
+                "scrap": 0.0,
+                "over": 0.0
+              },
+              {
+                "code": "WO-ACME-4715",
+                "quantity": 12000.0,
+                "good": 0.0,
+                "scrap": 0.0,
+                "over": 0.0
+              },
+              {
+                "code": "WO-ACME-4714",
+                "quantity": 16800.0,
+                "good": 0.0,
+                "scrap": 0.0,
+                "over": 0.0
+              },
+              {
+                "code": "WO-ACME-4713",
+                "quantity": 14400.0,
+                "good": 0.0,
+                "scrap": 0.0,
+                "over": 0.0
+              },
+              {
+                "code": "WO-ACME-4712",
+                "quantity": 18000.0,
+                "good": 0.0,
+                "scrap": 0.0,
+                "over": 0.0
+              },
+              {
+                "code": "WO-ACME-4711",
+                "quantity": 4000.0,
+                "good": 2060.0,
+                "scrap": 116.0,
+                "over": 0.0
+              }
+            ],
+            "mes_orders_the_line_never_published": [
+              "WO-ACME-4712",
+              "WO-ACME-4713",
+              "WO-ACME-4714",
+              "WO-ACME-4715",
+              "WO-ACME-4716",
+              "WO-ACME-4717",
+              "WO-ACME-4718",
+              "WO-ACME-4719",
+              "WO-ACME-4720"
+            ],
+            "mes_good_total": 2060.0,
+            "over_run_reported": 0,
+            "over_run_in_truth": 0,
+            "over_run_unknown_because": null,
+            "unassigned_production": {
+              "good": 0.0,
+              "scrap": 0.0,
+              "entries": 0,
+              "unknown_because": null,
+              "note": "counted by a machine with no order open to book it against; the MES keeps these rather than dropping them, with the machine and the time and no guess about which order they belonged to. Every machine on the line, not the last one - so it is not the counterpart of any single order's gap, and a line of six stations counts most units six times"
+            },
+            "rows": [
+              {
+                "order": "4711",
+                "code": "WO-ACME-4711",
+                "truth_good": 2336,
+                "overlap_good": 289,
+                "expected_range": [
+                  2336,
+                  2625
+                ],
+                "mes_quantity": 4000.0,
+                "mes_good": 2060.0,
+                "verdict": "booked 276.0 fewer than the line made",
+                "truth_over_run": 0,
+                "truth_over_run_range": [
+                  0,
+                  0
+                ],
+                "mes_over_run": 0.0,
+                "over_run_verdict": "the line did not run past the order, and the MES agrees",
+                "unknown_because": null
+              }
+            ]
+          }
+        },
+        "downtime": {
+          "measurement": "downtime",
+          "question": "were the scripted stops seen, and were the planned ones kept out of downtime?",
+          "unknown_because": null,
+          "speed": 20.0,
+          "resolution_line_seconds": 10.0,
+          "breakdowns": {
+            "scripted": 1,
+            "scored": 0,
+            "recall": null,
+            "recorded_late": 0,
+            "events": [
+              {
+                "equipment": "WASH01",
+                "window_line_s": [
+                  420,
+                  560
+                ],
+                "scripted_line_seconds": 140.0,
+                "scripted_wall_seconds": 7.0,
+                "detected": null,
+                "detected_line_seconds": null,
+                "detected_wall_seconds": null,
+                "recall": null,
+                "lag_line_seconds": null,
+                "resolution_line_seconds": 10.0,
+                "lag_says": "unknown",
+                "unknown_because": null
+              }
+            ]
+          },
+          "planned_stops": {
+            "scripted": 0,
+            "scored": 0,
+            "misclassified_as_downtime": null,
+            "truth_line_seconds": 0,
+            "events": []
+          },
+          "total_down": {
+            "truth_line_seconds": 140,
+            "overlap_line_seconds": 0,
+            "expected_range": [
+              140,
+              140
+            ],
+            "mes_line_seconds": 0.0,
+            "mes_wall_seconds": 0,
+            "difference_line_seconds": -140.0,
+            "note": "the MES records wall seconds; multiplied by the replay speed to compare with the line's own clock"
+          },
+          "idle_stops": {
+            "question": "a machine with nothing to work on, or nowhere to put what it made, is not a machine that broke",
+            "scripted": 0,
+            "scored": 0,
+            "misclassified_as_downtime": null,
+            "truth_line_seconds": {
+              "starved": 333,
+              "blocked": 220
+            },
+            "events": []
+          },
+          "labels": {
+            "mes_unlabelled_share": 0.0,
+            "truth_unlabelled_share": null,
+            "unknown_because": "nothing in this run labels a stop - no downtime labels arrive by file and no operator names one - so what share should have been labelled is not something this run establishes",
+            "reasons": []
+          }
+        },
+        "oee": {
+          "measurement": "oee",
+          "question": "does the MES's OEE match the hour the line actually had?",
+          "unknown_because": null,
+          "speed": 20.0,
+          "window": {
+            "truth_line_seconds": 1500,
+            "mes_line_seconds": 1764.0,
+            "mismatch_share": 0.176,
+            "availability_resolution": 0.176,
+            "note": "the MES measured over its own window; an availability difference smaller than the window mismatch cannot be told apart from it"
+          },
+          "stations_total": 6,
+          "stations_answered": 6,
+          "stations": [
+            {
+              "station": "LD",
+              "equipment": "LD01",
+              "truth": {
+                "availability": 0.9267,
+                "performance": 0.9728,
+                "quality": 0.9984,
+                "running_line_seconds": 1390,
+                "down_line_seconds": 0,
+                "good": 2475,
+                "scrap": 4,
+                "rated_cycle_seconds": 0.5454545454545454
+              },
+              "mes": {
+                "availability": null,
+                "quality": null,
+                "good": 2202.0,
+                "scrap": 4.0,
+                "ideal_cycle_seconds": 0.545,
+                "performance_as_reported": null,
+                "performance_ratio_as_reported": 0.9429,
+                "counts_outrun_run_time": false,
+                "oee_as_reported": null,
+                "runtime_wall_seconds": 63.8,
+                "downtime_wall_seconds": 0.0,
+                "runtime_line_seconds": 1276.0,
+                "downtime_line_seconds": 0.0,
+                "performance_line_clock": 0.9422,
+                "oee_line_clock": null,
+                "performance_note": null
+              },
+              "difference": {
+                "availability": null,
+                "performance": -0.0306,
+                "quality": null
+              },
+              "performance_like_for_like": true,
+              "performance_resolution": 0.082,
+              "mes_performance_above_rated": false,
+              "mes_units_outrun_its_own_runtime": false,
+              "unknown_because": null
+            },
+            {
+              "station": "RD",
+              "equipment": "RD01",
+              "truth": {
+                "availability": 0.9267,
+                "performance": 0.9856,
+                "quality": 0.9899,
+                "running_line_seconds": 1390,
+                "down_line_seconds": 0,
+                "good": 2441,
+                "scrap": 25,
+                "rated_cycle_seconds": 0.5555555555555556
+              },
+              "mes": {
+                "availability": null,
+                "quality": null,
+                "good": 2162.0,
+                "scrap": 27.0,
+                "ideal_cycle_seconds": 0.556,
+                "performance_as_reported": null,
+                "performance_ratio_as_reported": 0.9548,
+                "counts_outrun_run_time": false,
+                "oee_as_reported": null,
+                "runtime_wall_seconds": 63.7,
+                "downtime_wall_seconds": 0.0,
+                "runtime_line_seconds": 1274.0,
+                "downtime_line_seconds": 0.0,
+                "performance_line_clock": 0.9553,
+                "oee_line_clock": null,
+                "performance_note": null
+              },
+              "difference": {
+                "availability": null,
+                "performance": -0.0303,
+                "quality": null
+              },
+              "performance_like_for_like": true,
+              "performance_resolution": 0.0835,
+              "mes_performance_above_rated": false,
+              "mes_units_outrun_its_own_runtime": false,
+              "unknown_because": null
+            },
+            {
+              "station": "Washer",
+              "equipment": "WASH01",
+              "truth": {
+                "availability": 0.9067,
+                "performance": 0.9395,
+                "quality": 0.9869,
+                "running_line_seconds": 1360,
+                "down_line_seconds": 140,
+                "good": 2417,
+                "scrap": 32,
+                "rated_cycle_seconds": 0.5217391304347826
+              },
+              "mes": {
+                "availability": null,
+                "quality": null,
+                "good": 2160.0,
+                "scrap": 30.0,
+                "ideal_cycle_seconds": 0.522,
+                "performance_as_reported": null,
+                "performance_ratio_as_reported": 0.8971,
+                "counts_outrun_run_time": false,
+                "oee_as_reported": null,
+                "runtime_wall_seconds": 63.7,
+                "downtime_wall_seconds": 0.0,
+                "runtime_line_seconds": 1274.0,
+                "downtime_line_seconds": 0.0,
+                "performance_line_clock": 0.8973,
+                "oee_line_clock": null,
+                "performance_note": null
+              },
+              "difference": {
+                "availability": null,
+                "performance": -0.0422,
+                "quality": null
+              },
+              "performance_like_for_like": true,
+              "performance_resolution": 0.0632,
+              "mes_performance_above_rated": false,
+              "mes_units_outrun_its_own_runtime": false,
+              "unknown_because": null
+            },
+            {
+              "station": "QI",
+              "equipment": "QI01",
+              "truth": {
+                "availability": 0.92,
+                "performance": 0.9391,
+                "quality": 0.9847,
+                "running_line_seconds": 1380,
+                "down_line_seconds": 0,
+                "good": 2382,
+                "scrap": 37,
+                "rated_cycle_seconds": 0.5357142857142857
+              },
+              "mes": {
+                "availability": null,
+                "quality": null,
+                "good": 2137.0,
+                "scrap": 32.0,
+                "ideal_cycle_seconds": 0.536,
+                "performance_as_reported": null,
+                "performance_ratio_as_reported": 0.9126,
+                "counts_outrun_run_time": false,
+                "oee_as_reported": null,
+                "runtime_wall_seconds": 63.7,
+                "downtime_wall_seconds": 0.0,
+                "runtime_line_seconds": 1274.0,
+                "downtime_line_seconds": 0.0,
+                "performance_line_clock": 0.9125,
+                "oee_line_clock": null,
+                "performance_note": null
+              },
+              "difference": {
+                "availability": null,
+                "performance": -0.0266,
+                "quality": null
+              },
+              "performance_like_for_like": true,
+              "performance_resolution": 0.0768,
+              "mes_performance_above_rated": false,
+              "mes_units_outrun_its_own_runtime": false,
+              "unknown_because": null
+            },
+            {
+              "station": "Refill",
+              "equipment": "FILL01",
+              "truth": {
+                "availability": 0.9253,
+                "performance": 0.9774,
+                "quality": 0.9907,
+                "running_line_seconds": 1388,
+                "down_line_seconds": 0,
+                "good": 2352,
+                "scrap": 22,
+                "rated_cycle_seconds": 0.5714285714285714
+              },
+              "mes": {
+                "availability": null,
+                "quality": null,
+                "good": 2099.0,
+                "scrap": 16.0,
+                "ideal_cycle_seconds": 0.571,
+                "performance_as_reported": null,
+                "performance_ratio_as_reported": 0.9481,
+                "counts_outrun_run_time": false,
+                "oee_as_reported": null,
+                "runtime_wall_seconds": 63.7,
+                "downtime_wall_seconds": 0.0,
+                "runtime_line_seconds": 1274.0,
+                "downtime_line_seconds": 0.0,
+                "performance_line_clock": 0.9479,
+                "oee_line_clock": null,
+                "performance_note": null
+              },
+              "difference": {
+                "availability": null,
+                "performance": -0.0295,
+                "quality": null
+              },
+              "performance_like_for_like": true,
+              "performance_resolution": 0.0821,
+              "mes_performance_above_rated": false,
+              "mes_units_outrun_its_own_runtime": false,
+              "unknown_because": null
+            },
+            {
+              "station": "Palletiser",
+              "equipment": "PAL01",
+              "truth": {
+                "availability": 0.9327,
+                "performance": 0.9852,
+                "quality": 0.997,
+                "running_line_seconds": 1399,
+                "down_line_seconds": 0,
+                "good": 2336,
+                "scrap": 7,
+                "rated_cycle_seconds": 0.5882352941176471
+              },
+              "mes": {
+                "availability": null,
+                "quality": null,
+                "good": 2060.0,
+                "scrap": 7.0,
+                "ideal_cycle_seconds": 0.588,
+                "performance_as_reported": null,
+                "performance_ratio_as_reported": 0.9544,
+                "counts_outrun_run_time": false,
+                "oee_as_reported": null,
+                "runtime_wall_seconds": 63.7,
+                "downtime_wall_seconds": 0.0,
+                "runtime_line_seconds": 1274.0,
+                "downtime_line_seconds": 0.0,
+                "performance_line_clock": 0.954,
+                "oee_line_clock": null,
+                "performance_note": null
+              },
+              "difference": {
+                "availability": null,
+                "performance": -0.0312,
+                "quality": null
+              },
+              "performance_like_for_like": true,
+              "performance_resolution": 0.0893,
+              "mes_performance_above_rated": false,
+              "mes_units_outrun_its_own_runtime": false,
+              "unknown_because": null
+            }
+          ],
+          "line_oee_reported": null,
+          "constraint_reported": null
+        },
+        "connection": {
+          "measurement": "connection",
+          "question": "what did the MES say about the minutes it could not see?",
+          "unknown_because": null,
+          "speed": 20.0,
+          "scripted_outages": 2,
+          "scripted_line_seconds": 420.0,
+          "watched": {
+            "looks": 80,
+            "resolution_line_seconds": 20.0,
+            "agent_health_interval_line_seconds": 30.0,
+            "shortest_outage_the_agent_could_see": 60.0,
+            "first_look_line_second": 22.8,
+            "last_look_line_second": 1662.8,
+            "note": "a machine is only ever known to have read disconnected by the look that saw it, so the polling interval is the resolution of every figure here"
+          },
+          "outages": [
+            {
+              "event": "disconnect",
+              "window_sim_s": [
+                360,
+                600
+              ],
+              "scripted_seconds": 12.0,
+              "window_wall": [
+                "2026-10-10T06:44:14.118049",
+                "2026-10-10T06:44:26.118049"
+              ],
+              "scripted_line_seconds": 240.0,
+              "resolvable_at_this_speed": true,
+              "looks_inside": 12,
+              "machines_seen": 6,
+              "machines_read_disconnected": [
+                "FILL01",
+                "LD01",
+                "PAL01",
+                "QI01",
+                "RD01",
+                "WASH01"
+              ],
+              "health_said_disconnected_at_worst": 6,
+              "machines_still_claiming_a_state": [],
+              "verdict": "read as disconnected"
+            },
+            {
+              "event": "disconnect",
+              "window_sim_s": [
+                1080,
+                1260
+              ],
+              "scripted_seconds": 9.0,
+              "window_wall": [
+                "2026-10-10T06:44:50.118049",
+                "2026-10-10T06:44:59.118049"
+              ],
+              "scripted_line_seconds": 180.0,
+              "resolvable_at_this_speed": true,
+              "looks_inside": 8,
+              "machines_seen": 6,
+              "machines_read_disconnected": [
+                "FILL01",
+                "LD01",
+                "PAL01",
+                "QI01",
+                "RD01",
+                "WASH01"
+              ],
+              "health_said_disconnected_at_worst": 6,
+              "machines_still_claiming_a_state": [],
+              "verdict": "read as disconnected"
+            }
+          ],
+          "after_the_run": {
+            "note": "the MES counts wall seconds and the script is in line seconds; these are the MES's own figures restated on the line's clock",
+            "stations": [
+              {
+                "station": "LD",
+                "equipment": "LD01",
+                "unknown_line_seconds": 484.0,
+                "availability": null
+              },
+              {
+                "station": "Palletiser",
+                "equipment": "PAL01",
+                "unknown_line_seconds": 484.0,
+                "availability": null
+              },
+              {
+                "station": "QI",
+                "equipment": "QI01",
+                "unknown_line_seconds": 484.0,
+                "availability": null
+              },
+              {
+                "station": "RD",
+                "equipment": "RD01",
+                "unknown_line_seconds": 484.0,
+                "availability": null
+              },
+              {
+                "station": "Refill",
+                "equipment": "FILL01",
+                "unknown_line_seconds": 484.0,
+                "availability": null
+              },
+              {
+                "station": "Washer",
+                "equipment": "WASH01",
+                "unknown_line_seconds": 484.0,
+                "availability": null
+              }
+            ],
+            "unknown_line_seconds_total": 2904.0,
+            "unknown_line_seconds_expected": 2520.0,
+            "difference_line_seconds": 384.0,
+            "difference_says": "longer than the script by the agent's detection and reconnect lag - it notices the link is gone at its next health check and finds it back at its next retry, and says it does not know in between"
+          }
+        }
+      }
+    }
+  ],
+  "feedback_conversations": 0
+}

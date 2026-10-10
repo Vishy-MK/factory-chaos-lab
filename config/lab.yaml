@@ -1,0 +1,40 @@
+upstream:
+  path: factorysemantics-mes
+  pack_source: labs/multiplant/bottling
+
+runtime:
+  dir: runtime
+  fleet_dir: runtime/fleet
+  data_dir: runtime/data
+  work_dir: runtime/work
+  state_dir: runtime/state
+  log_dir: runtime/logs
+
+plant:
+  name: bottling
+  sim_speed: 1.0
+  start_timeout_s: 90
+  stop_timeout_s: 20
+
+reader:
+  code: ANALYST
+  password_env: FSMES_ANALYST_PASSWORD
+  password_default: analyst-lab-only
+
+sampling:
+  interval_s: 1.0
+  request_timeout_s: 3.0
+  post_s: 15
+
+application_runs:
+  timeout_s: 420
+  default_speed: 20
+  default_seed: 42
+
+exporter:
+  host: 127.0.0.1
+  port: 9108
+  cache_s: 1.0
+
+results:
+  dir: results

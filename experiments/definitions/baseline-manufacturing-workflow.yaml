@@ -1,0 +1,19 @@
+name: baseline-manufacturing-workflow
+description: Play 25 minutes of the bottling line with no scripted fault in an ephemeral plant and score what the MES booked.
+category: application
+target:
+  plant: bottling
+fault:
+  type: none
+application:
+  duration_s: 1500
+  speed: 20
+  seed: 42
+  measure:
+    - booking
+    - downtime
+    - oee
+expected_measurements:
+  - booking
+  - oee
+scoring: fsmes_lab_run

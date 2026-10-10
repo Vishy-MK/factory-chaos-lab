@@ -1,0 +1,25 @@
+name: sim-micro-stops-palletiser
+description: Script random short stops on the palletiser across the run, the death-by-a-thousand-cuts case for OEE performance.
+category: application
+target:
+  plant: bottling
+  station: Palletiser
+fault:
+  type: sim_micro_stops
+  parameters:
+    every_min_s: 110
+    every_max_s: 130
+    duration_min_s: 8
+    duration_max_s: 18
+application:
+  duration_s: 1500
+  speed: 20
+  seed: 42
+  measure:
+    - booking
+    - downtime
+    - oee
+expected_measurements:
+  - oee
+  - booking
+scoring: fsmes_lab_run
