@@ -52,7 +52,7 @@ def store_two_runs(settings):
 
 def test_only_the_tools_that_change_the_plant_are_marked_destructive(server):
     tools = {t.name: t for t in asyncio.run(server.list_tools())}
-    assert len(tools) == 20
+    assert len(tools) == 21
     assert {n for n, t in tools.items() if not t.annotations.read_only_hint} == WRITE_TOOLS
     assert all(tools[n].annotations.destructive_hint for n in WRITE_TOOLS)
 
@@ -116,6 +116,19 @@ def test_result_tools_read_stored_runs(server, settings):
     assert next(r for r in rows if r["metric"] == "fault_api_success_ratio")["delta"] == 0.5
 
 
+def test_wait_returns_a_finished_run_at_once_and_times_out_on_an_unknown_one(server, settings, monkeypatch):
+    import chaoslab.mcp_server as module
+
+    monkeypatch.setattr(module, "POLL_S", 0.05)
+    first, _ = store_two_runs(settings)
+    done = call(server, "wait_for_experiment", experiment_id=first)
+    assert done["finished"] is True
+    assert done["timed_out"] is False
+    pending = call(server, "wait_for_experiment", experiment_id="20261010T000009Z-never-000009", timeout_s=1)
+    assert pending["timed_out"] is True
+    assert pending["state"] == "unknown"
+
+
 def test_emergency_stop_with_nothing_active_is_safe(server):
     report = call(server, "emergency_stop")
     assert report["ok"] is True
@@ -143,4 +156,4 @@ def test_the_cli_serves_the_tools_over_stdio(lab_root):
 
     names = asyncio.run(asyncio.wait_for(list_names(), timeout=30))
     assert WRITE_TOOLS <= names
-    assert len(names) == 20
+    assert len(names) == 21

@@ -409,6 +409,25 @@ def cmd_mcp(args) -> int:
     serve(Path(args.root) if args.root else None)
     return EXIT_OK
 
+
+def cmd_agent(args) -> int:
+    from chaoslab.agents import commands
+    from chaoslab.agents.llm import LLMError
+    from chaoslab.agents.runtime import approve_all, ask_terminal
+
+    root = Path(args.root) if args.root else None
+    try:
+        if args.agent_command == "inject":
+            code, payload = commands.inject(root, args.experiment, approve_all if args.approve else ask_terminal,
+                                            task=args.task)
+        else:
+            code, payload = commands.analyze(root, args.experiment_id)
+    except (LLMError, FileNotFoundError) as exc:
+        _warn(str(exc))
+        return EXIT_FAILED
+    _emit(payload, True)
+    return code
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="chaoslab", description="FactorySemantics chaos laboratory controller")
     parser.add_argument("--root", help="lab root directory (default: the checkout containing this package)")
@@ -466,6 +485,17 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("exporter", help="run the Prometheus exporter in the foreground").set_defaults(
         func=cmd_exporter)
     sub.add_parser("mcp", help="serve the lab as MCP tools over stdio").set_defaults(func=cmd_mcp)
+    agent = sub.add_parser("agent", help="run an LLM agent (Mistral by default) against the lab")
+    agent_sub = agent.add_subparsers(dest="agent_command", required=True)
+    inject = agent_sub.add_parser("inject", help="the Injector runs one experiment, asking before the real fault")
+    inject.add_argument("experiment", help="name of a stored experiment definition")
+    inject.add_argument("--task", help="free-text task instead of 'run this stored experiment'")
+    inject.add_argument("--approve", action="store_true",
+                        help="approve the real fault in advance instead of asking at the terminal")
+    inject.set_defaults(func=cmd_agent)
+    analyze = agent_sub.add_parser("analyze", help="the Recovery Analyst judges one finished experiment")
+    analyze.add_argument("experiment_id")
+    analyze.set_defaults(func=cmd_agent)
     workload = sub.add_parser("workload", help="run a bounded workload against the lab plant")
     workload.add_argument("--profile", default="baseline")
     workload.add_argument("--seconds", type=int, default=30)

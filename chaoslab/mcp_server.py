@@ -4,13 +4,15 @@ The tools are thin: argument handling and one call into `LabApi`, `Lifecycle` or
 here decides whether an experiment is safe. `PolicyValidator`, the lease, the watchdog and cleanup do that
 exactly as they do for the CLI, so an agent can propose anything and still only run what the policy allows.
 
-`run_experiment` returns as soon as the experiment is accepted; poll `experiment_status` for the outcome.
+`run_experiment` returns as soon as the experiment is accepted; `wait_for_experiment` blocks until it finishes, so
+an agent does not spend a model turn on every poll.
 """
 
 from __future__ import annotations
 
 import functools
 import json
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -25,6 +27,9 @@ from chaoslab.lifecycle import Lifecycle, is_healthy
 from chaoslab.settings import ConfigError
 
 READ = ToolAnnotations(read_only_hint=True, open_world_hint=False)
+MAX_WAIT_S = 900
+POLL_S = 2.0
+
 WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=False)
 
 # Refusals the caller can act on. Their text reaches the agent; anything else is a crash and stays on the server.
@@ -122,6 +127,20 @@ def build_server(root: Path | None = None) -> MCPServer:
     def experiment_status(experiment_id: str | None = None) -> dict[str, Any]:
         """State of one experiment, or with no id: the active experiment and the latest result."""
         return _plain(api.status(experiment_id))
+
+    @tool(READ)
+    def wait_for_experiment(experiment_id: str, timeout_s: int = 300) -> dict[str, Any]:
+        """Block until an experiment has finished, then return its status. Gives up after timeout_s (at most
+        900) and says so; the experiment keeps running either way."""
+        deadline = time.monotonic() + min(max(timeout_s, 1), MAX_WAIT_S)
+        started = time.monotonic()
+        while True:
+            status = api.status(experiment_id)
+            if status.get("finished") or time.monotonic() >= deadline:
+                break
+            time.sleep(POLL_S)
+        return _plain({**status, "timed_out": not status.get("finished"),
+                       "waited_s": round(time.monotonic() - started, 1)})
 
     @tool(WRITE)
     def emergency_stop() -> dict[str, Any]:

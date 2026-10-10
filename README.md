@@ -91,19 +91,48 @@ Details, parameters and what each experiment has actually shown are in `docs/EXP
 .venv/bin/python -m chaoslab mcp       # stdio; .mcp.json registers it for Claude Code in this directory
 ```
 
-The same contract as `chaoslab/api.py`, as 20 MCP tools. Only four change anything and are marked destructive:
+The same contract as `chaoslab/api.py`, as 21 MCP tools. Only four change anything and are marked destructive:
 `run_experiment`, `emergency_stop`, `plant_start`, `plant_stop`. The rest read.
 
 | Group | Tools |
 |---|---|
 | discovery | `list_fault_types`, `list_targets`, `get_safety_policy`, `list_experiments`, `get_experiment` |
-| proposing and running | `validate_experiment`, `run_experiment` (definition or stored name; `dry_run`), `experiment_status`, `emergency_stop` |
+| proposing and running | `validate_experiment`, `run_experiment` (definition or stored name; `dry_run`), `experiment_status`, `wait_for_experiment`, `emergency_stop` |
 | results | `list_runs`, `get_result`, `get_metrics`, `get_logs`, `get_scoring`, `get_recovery`, `compare_runs` |
 | the plant | `plant_status`, `check_resources`, `plant_start`, `plant_stop` |
 
 `run_experiment` goes through the same policy, lease and cleanup as the CLI and returns an `experiment_id` at once;
-poll `experiment_status`. A rejected proposal returns its reasons; an unknown run id or definition is a tool error
+`wait_for_experiment` blocks until it finishes. A rejected proposal returns its reasons; an unknown run id or definition is a tool error
 with its reason.
+
+## Agents
+
+Two LLM agents drive the lab through the MCP tools above, called in-process. Mistral is the default provider;
+any OpenAI-compatible provider works the same way.
+
+```bash
+export MISTRAL_API_KEY=...
+python -m chaoslab agent inject api-process-outage-10s   # asks y/N at the terminal before the real fault
+python -m chaoslab agent analyze <experiment-id>         # verdict saved as results/<id>/agent-analysis-*.json
+```
+
+| Agent | Does | Tools |
+|---|---|---|
+| Injector | checks health and resources, validates, dry-runs, runs one experiment, waits, emergency-stops if it hangs | plant/resource status, discovery, `validate_experiment`, `run_experiment`, `experiment_status`, `wait_for_experiment`, `emergency_stop` |
+| Recovery Analyst | judges recovery from recovery stages, metrics, logs, scoring and a baseline comparison; may disagree with the lab only with evidence | result tools, `list_runs`, `compare_runs`, `plant_status` (read only) |
+
+Enforced in code, not left to the prompt: an agent is offered only its own tools and a call to any other is
+refused; `run_experiment` without `dry_run` needs a person's approval (`--approve` gives it in advance; with no
+terminal the answer is no); the safety policy still decides what runs. Transcripts are saved in
+`runtime/state/agents/`. Exit codes of `inject` match `run`: 0 recovered, 3 recovered with data findings,
+2 refused (rejected, denied, plant not ready, preflight failed), 1 anything else.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `CHAOSLAB_LLM_PROVIDER` | `mistral` | `mistral` or `groq` |
+| `MISTRAL_API_KEY` / `GROQ_API_KEY` | none | key for the chosen provider |
+| `CHAOSLAB_LLM_MODEL` | `mistral-large-latest` for Mistral; required for Groq | model name |
+| `CHAOSLAB_LLM_BASE_URL` | the provider's | another OpenAI-compatible endpoint |
 
 ## Looking at results
 
