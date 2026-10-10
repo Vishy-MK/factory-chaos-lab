@@ -57,14 +57,28 @@ def approve_all(tool: str, arguments: dict) -> bool:
 def ask_terminal(tool: str, arguments: dict) -> bool:
     """Ask on the controlling terminal, so piped stdin/stdout cannot answer for the person."""
     subject = arguments.get("name") or (arguments.get("definition") or {}).get("name") or "an inline definition"
+    rule = "=" * 72
     try:
-        with open("/dev/tty", "r+") as tty:
-            tty.write(f"\nThe agent wants to inject a real fault: {tool} {subject}\n")
+        # Separate handles: "r+" on a terminal fails as unseekable, which would read as "no terminal" and refuse.
+        with open("/dev/tty") as tty_in, open("/dev/tty", "w") as tty:
+            tty.write(f"\n\a{rule}\n  APPROVAL NEEDED: the agent wants to inject a real fault\n  {tool} {subject}\n")
             if arguments.get("definition"):
                 tty.write(json.dumps(arguments["definition"], indent=2) + "\n")
-            tty.write("Run it? [y/N] ")
-            tty.flush()
-            return tty.readline().strip().lower() in ("y", "yes")
+            tty.write(f"{rule}\n")
+            # Enter alone is still no; anything else unrecognised asks again rather than quietly refusing.
+            while True:
+                tty.write("Type y to run it, n to refuse [y/N]: ")
+                tty.flush()
+                answer = tty_in.readline()
+                if not answer:
+                    return False
+                answer = answer.strip().lower()
+                if answer in ("y", "yes"):
+                    tty.write("Approved.\n")
+                    return True
+                if answer in ("", "n", "no"):
+                    tty.write("Refused: nothing will be injected.\n")
+                    return False
     except OSError:
         return False
 

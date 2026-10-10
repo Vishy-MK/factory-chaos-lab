@@ -246,3 +246,55 @@ def test_analyze_does_not_repeat_a_baseline_it_never_compared(lab_root, settings
     _, payload = commands.analyze(lab_root, run_id, llm=ScriptedLLM(
         calls(("compare_runs", {"first": baseline, "second": run_id})), answer(dict(claimed))))
     assert payload["output"]["baseline_compared"] == baseline
+
+
+ASK_CHILD = """
+import sys
+sys.path.insert(0, {root!r})
+from chaoslab.agents.runtime import ask_terminal
+print("RESULT", ask_terminal("run_experiment", {{"name": "api-process-outage-10s"}}), flush=True)
+"""
+
+
+@pytest.mark.parametrize("typed, expected", [
+    (["y\n"], True), (["\n"], False), (["no\n"], False), (["sure\n", "yes\n"], True),
+])
+def test_the_approval_prompt_works_on_a_real_terminal(typed, expected):
+    """A person at a terminal is asked, and their answer decides: the prompt must not refuse on its own."""
+    import os
+    import pty
+    import select
+    import sys
+    import time
+    from pathlib import Path
+
+    root = str(Path(__file__).resolve().parents[1])
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execv(sys.executable, [sys.executable, "-c", ASK_CHILD.format(root=root)])
+    output = b""
+
+    def read_for(seconds):
+        nonlocal output
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if select.select([fd], [], [], 0.05)[0]:
+                try:
+                    output += os.read(fd, 4096)
+                except OSError:
+                    return
+
+    try:
+        for answer in typed:
+            deadline = time.monotonic() + 10
+            prompts = output.count(b"[y/N]")
+            while output.count(b"[y/N]") == prompts and time.monotonic() < deadline:
+                read_for(0.1)
+            os.write(fd, answer.encode())
+        deadline = time.monotonic() + 10
+        while b"RESULT" not in output and time.monotonic() < deadline:
+            read_for(0.1)
+    finally:
+        os.waitpid(pid, 0)
+    assert b"APPROVAL NEEDED" in output
+    assert f"RESULT {expected}".encode() in output
