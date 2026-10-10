@@ -298,3 +298,12 @@ def test_the_approval_prompt_works_on_a_real_terminal(typed, expected):
         os.waitpid(pid, 0)
     assert b"Agent requests fault injection: run_experiment api-process-outage-10s" in output
     assert f"RESULT {expected}".encode() in output
+
+
+def test_inject_reports_emergency_stop_from_the_tool_calls_not_the_model(lab_root):
+    claims_it = answer({"experiment_name": "proposal", "outcome": "error", "emergency_stop_called": True})
+    _, payload = commands.inject(lab_root, "proposal", deny_all, llm=ScriptedLLM(claims_it))
+    assert payload["output"]["emergency_stop_called"] is False
+    _, payload = commands.inject(lab_root, "proposal", deny_all, llm=ScriptedLLM(
+        calls(("emergency_stop", {})), answer({"experiment_name": "proposal", "outcome": "error"})))
+    assert payload["output"]["emergency_stop_called"] is True

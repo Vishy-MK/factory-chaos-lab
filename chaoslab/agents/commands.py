@@ -30,6 +30,9 @@ def inject(root: Path | None, experiment: str, approver: Approver, task: str | N
            llm: ChatClient | None = None) -> tuple[int, dict]:
     task = task or f"Run the stored experiment named {experiment!r}."
     run = asyncio.run(_agent(root, INJECTOR, approver, llm).run(task))
+    if run.output is not None:
+        # What the agent did, from its own tool calls, not what it says it did.
+        run.output["emergency_stop_called"] = any(c.get("tool") == "emergency_stop" for c in run.transcript)
     payload = _finish(root, run)
     output = run.output or {}
     if output.get("outcome") == "finished":
