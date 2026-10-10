@@ -40,6 +40,18 @@ def with_plant_names(env: dict[str, str]) -> dict[str, str]:
     return env
 
 
+def with_database_hook(env: dict[str, str], settings: Settings) -> dict[str, str]:
+    """Load the dormant database latency hook into the plant's database clients; see chaoslab_dbhook.py."""
+    plant = settings.allowlist["plants"][settings.plant_name]
+    commands = [plant["components"][name]["command"] for name in plant.get("database_clients", [])
+                if name in plant["components"]]
+    if commands:
+        env["CHAOSLAB_DB_HOOK_DIR"] = str(settings.db_hook_dir)
+        env["CHAOSLAB_DB_HOOK_DATABASE"] = str(settings.database_file)
+        env["CHAOSLAB_DB_HOOK_COMPONENTS"] = ",".join(commands)
+    return env
+
+
 class FactorySemanticsAdapter:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -193,7 +205,7 @@ class FactorySemanticsAdapter:
         speed = float(self.settings.lab["plant"]["sim_speed"])
         env = plants_mod.plant_env(self.name, registry[self.name], work, speed)
         env.update(self.upstream_config_overrides())
-        return with_plant_names(env)
+        return with_database_hook(with_plant_names(env), self.settings)
 
     def upstream_config_overrides(self) -> dict[str, str]:
         config_dir = self.settings.upstream_dir / "config"
@@ -207,7 +219,7 @@ class FactorySemanticsAdapter:
         env = dict(os.environ)
         env["FSMES_PLANT_REGISTRY"] = str(self.settings.fleet_file)
         env.update(self.upstream_config_overrides())
-        return with_plant_names(env)
+        return with_database_hook(with_plant_names(env), self.settings)
 
     def _run_fsmes(self, arguments: list[str], log_name: str, timeout: float) -> int:
         self.settings.log_dir.mkdir(parents=True, exist_ok=True)

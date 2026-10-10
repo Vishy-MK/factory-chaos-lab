@@ -18,6 +18,11 @@ cpu_pressure:
   max_duration_s: 30
   default_percent: 60
 
+database_latency:
+  enabled: true
+  max_delay_ms: 1000
+  max_duration_s: 30
+
 memory_pressure:
   enabled: false
 

@@ -17,6 +17,10 @@ plants:
       floor:
         command: run-operations
     database: sqlite
+    # Components that open the plant database; the database latency hook is loaded only into these.
+    database_clients:
+      - api
+      - opc-agent
 
 fault_targets:
   process_outage:
@@ -32,4 +36,6 @@ fault_targets:
   cpu_pressure:
     - api
   sqlite_write_lock:
+    - database
+  database_latency:
     - database

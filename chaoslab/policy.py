@@ -140,6 +140,17 @@ class PolicyValidator:
                 if resolved.get("duration_s", 0) > pressure.get("max_duration_s", 30):
                     reasons.append(f"{label}: cpu_pressure duration exceeds policy maximum "
                                    f"{pressure['max_duration_s']}")
+            if fault_name == "database_latency":
+                latency = self.policy.get("database_latency", {})
+                if not latency.get("enabled", False):
+                    reasons.append(f"{label}: database_latency is disabled by safety policy "
+                                   "(database_latency.enabled: false)")
+                if resolved.get("delay_ms", 0) > latency.get("max_delay_ms", 1000):
+                    reasons.append(f"{label}: database_latency delay_ms exceeds policy maximum "
+                                   f"{latency.get('max_delay_ms', 1000)}")
+                if resolved.get("duration_s", 0) > latency.get("max_duration_s", 30):
+                    reasons.append(f"{label}: database_latency duration exceeds policy maximum "
+                                   f"{latency.get('max_duration_s', 30)}")
             wall = hold + float(limits.get("cleanup_grace_s", 15))
         else:
             reasons.extend(self._validate_simulator_params(fault, resolved, label, experiment))
@@ -166,10 +177,10 @@ class PolicyValidator:
 
         if spec.layer == "infrastructure" and plant in self.allowlist["plants"]:
             allowed_targets = self.allowlist["fault_targets"].get(spec.name, [])
-            if spec.name == "sqlite_write_lock":
+            if "resource" in spec.target_keys:
                 resource = target.get("resource")
                 if resource != "database":
-                    reasons.append(f"{label}: sqlite_write_lock target.resource must be 'database'")
+                    reasons.append(f"{label}: {spec.name} target.resource must be 'database'")
                 elif "database" not in allowed_targets:
                     reasons.append(f"{label}: database is not an allowlisted target for {spec.name}")
             else:

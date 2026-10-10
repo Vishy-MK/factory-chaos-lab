@@ -13,7 +13,8 @@ system would call (see `docs/ARCHITECTURE.md`, part D).
 2. Plays **simulated manufacturing faults** (breakdown, changeover, counter reset, micro-stops, scrap burst, starve,
    block, OPC disconnect) through the application's own simulator and scoring harness (`fsmes lab run`).
 3. Injects **real infrastructure faults** into the live plant: killing and restarting the API, OPC UA server, OPC agent
-   or floor simulator; freezing a component; holding the database write lock; CPU contention on the API.
+   or floor simulator; freezing a component; holding the database write lock; delaying every plant database
+   statement; CPU contention on the API.
 4. Checks a safety policy before, during and after every experiment, cleans up, and refuses to claim recovery it
    cannot show.
 5. Exports lab metrics for Prometheus, ships Grafana dashboards, and collects log excerpts per experiment.
@@ -74,6 +75,7 @@ ephemeral plant and take about two minutes. Add `--dry-run` to validate and run 
 | `opc-server-outage-10s` | infrastructure | kill the OPC UA server for 10 s, restart |
 | `opc-agent-outage-10s` | infrastructure | kill the OPC agent for 10 s, restart |
 | `database-write-lock-10s` | infrastructure | hold the SQLite write lock for 10 s, roll back |
+| `database-latency-200ms-10s` | infrastructure | add 200 ms before every plant database statement for 10 s |
 | `api-cpu-pressure-15s` | infrastructure | contend for the API's CPU for 15 s |
 | `compound-api-then-opc-outage` | infrastructure | two faults in sequence; refused unless `compound.enabled` |
 | `baseline-manufacturing-workflow` | application | 25 line-minutes, no fault, scored |
@@ -228,8 +230,9 @@ Stop the plant, delete `runtime/`, run `scripts/setup.sh`. `results/` and `facto
 ## Known limitations
 
 - Single host, process-level faults only. No network partition, packet loss, container or PostgreSQL faults.
-- Database *outage* and database/API *latency* faults are not supported in lightweight mode and are listed as
-  unsupported with reasons (`python -m chaoslab faults`).
+- Database *outage* and *API latency* faults are not supported in lightweight mode and are listed as unsupported
+  with reasons (`python -m chaoslab faults`). Database latency is supported through a lab-owned SQLAlchemy hook,
+  not a network delay; see `docs/DATABASE_LATENCY.md` for what it does and does not delay.
 - Application experiments score a replay at a compressed clock inside an ephemeral plant; they say nothing about
   infrastructure resilience.
 - The application withholds OEE availability when its observation coverage is below the pack's floor, so many

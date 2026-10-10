@@ -467,6 +467,125 @@ def _lock_is_free(path: str) -> tuple[bool, str]:
     return True, "write lock acquirable"
 
 
+def _dbhook():
+    from chaoslab.plant_names import chaoslab_dbhook
+
+    return chaoslab_dbhook
+
+
+def _injected_totals(directory) -> dict[int, int]:
+    return {int(s["pid"]): int(s["injected"]["statements"]) for s in _dbhook().read_stats(str(directory))}
+
+
+class DatabaseLatency(Fault):
+    spec = FaultSpec(
+        name="database_latency",
+        layer="infrastructure",
+        summary=("Add delay_ms before every SQL statement the plant's database clients (api, opc-agent) execute "
+                 "against the plant database, for duration_s. A lab-owned SQLAlchemy hook loaded at plant start "
+                 "does the delaying; it expires by itself at a monotonic deadline. The MES source is unchanged."),
+        params=(
+            Param("delay_ms", "int", "delay added before each statement, in milliseconds", 1, 1000, 200),
+            Param("duration_s", "int", "seconds the delay stays active", 1, 60, 10),
+        ),
+        target_keys=("plant", "resource"),
+        expected_effects=(
+            "every plant database statement takes at least delay_ms longer while the window is open",
+            "statements inside a write transaction hold SQLite's write lock longer, so other writers queue",
+            "api: request latency rises by delay_ms per statement a request executes",
+            "opc-agent: tag booking slows; ingestion rate may drop and catch up after the window",
+        ),
+        cleanup=("remove the activation file (the hook also stops at its deadline); verify no hooked process "
+                 "injects any further delay"),
+        recovery_criteria=("activation removed and no further injected delay", "api healthy",
+                           "authenticated API operation succeeds", "all machines connected",
+                           "tag ingestion advancing", "floor recording checks", "database integrity check ok",
+                           "database statement latency back within tolerance of baseline"),
+        preconditions=("database file present", "hook loaded in every database client", "no activation present"),
+    )
+
+    def hold_seconds(self, params):
+        return float(params.get("duration_s", 10))
+
+    def _hook_status(self, ctx: FaultContext) -> tuple[bool, str]:
+        plant = ctx.settings.allowlist["plants"][ctx.settings.plant_name]
+        clients = list(plant.get("database_clients", []))
+        if not clients:
+            return False, "the allowlist names no database_clients for this plant"
+        running = ctx.plant.find_components()
+        hooked = {int(s["pid"]): s for s in _dbhook().read_stats(str(ctx.settings.db_hook_dir))
+                  if s.get("plant") == ctx.settings.plant_name}
+        missing = []
+        for name in clients:
+            proc = running.get(name)
+            command = plant["components"][name]["command"]
+            if proc is None:
+                missing.append(f"{name} not running")
+            elif proc.pid not in hooked or hooked[proc.pid].get("component") != command:
+                missing.append(f"{name} (pid {proc.pid}) has no hook")
+        if missing:
+            return False, ("; ".join(missing) + ". The hook loads when a component starts: restart the plant with "
+                           "`chaoslab stop && chaoslab start` (scripts/stop.sh, scripts/start.sh) before the run")
+        return True, f"hook loaded in {clients}"
+
+    def preconditions(self, ctx, target, params):
+        path = ctx.settings.database_file
+        checks = [Check("database_present", path.is_file(), str(path))]
+        directory = ctx.settings.db_hook_dir
+        _dbhook().remove_dead_stats(str(directory))
+        loaded, detail = self._hook_status(ctx)
+        checks.append(Check("hook_loaded", loaded, detail))
+        control = _dbhook().read_control(str(directory))
+        checks.append(Check("no_activation_present", control is None,
+                            "no activation file" if control is None else
+                            "an activation file is present; run `chaoslab emergency-stop` to remove it"))
+        return checks
+
+    def inject(self, ctx, target, params):
+        hook = _dbhook()
+        directory = str(ctx.settings.db_hook_dir)
+        delay_ms = int(params.get("delay_ms", 200))
+        duration_s = int(params.get("duration_s", 10))
+        before = _injected_totals(directory)
+        control = hook.write_control(directory, ctx.settings.plant_name, str(ctx.settings.database_file),
+                                     delay_ms, duration_s)
+        return {"type": "database_latency", "token": control["token"], "delay_ms": delay_ms,
+                "duration_s": duration_s, "activated_at": control["activated_at"],
+                "activated_monotonic": control["activated_monotonic"],
+                "expires_monotonic": control["expires_monotonic"], "injected_statements_before": before}
+
+    def cleanup(self, ctx, record):
+        hook = _dbhook()
+        directory = str(ctx.settings.db_hook_dir)
+        try:
+            removed = hook.remove_control(directory)
+        except OSError as exc:
+            return Check("cleanup", False, f"could not remove the activation: {exc}")
+        if hook.read_control(directory) is not None:
+            return Check("cleanup", False, "activation file still present")
+        return Check("cleanup", True, "activation removed" if removed else "no activation present")
+
+    def removed(self, ctx, record):
+        hook = _dbhook()
+        directory = str(ctx.settings.db_hook_dir)
+        if hook.read_control(directory) is not None:
+            return Check("fault_removed", False, "activation file still present")
+        # A statement already sleeping when the activation went away still finishes its delay and is counted;
+        # wait that out, then require two flushes in a row with no further injected statement.
+        delay_s = min(int(record.get("delay_ms") or hook.HARD_MAX_DELAY_MS), hook.HARD_MAX_DELAY_MS) / 1000.0
+        settle = delay_s + 2 * hook.FLUSH_INTERVAL_S + 0.2
+        time.sleep(settle)
+        first = _injected_totals(directory)
+        time.sleep(2 * hook.FLUSH_INTERVAL_S + 0.2)
+        second = _injected_totals(directory)
+        grew = {pid: second[pid] - first.get(pid, 0) for pid in second if second[pid] > first.get(pid, 0)}
+        if grew:
+            return Check("fault_removed", False, f"hooked processes still injecting: {grew}")
+        return Check("fault_removed", True,
+                     f"activation absent; no injected statements in the {2 * hook.FLUSH_INTERVAL_S + 0.2:.1f}s "
+                     f"after a {settle:.1f}s settle ({len(second)} hooked processes)")
+
+
 class SimulatorFault(Fault):
     event_type: str
     needs_station = True
@@ -673,23 +792,7 @@ UNSUPPORTED = (
             "Lightweight mode uses an in-process SQLite file, not a database service. Making the file disappear or "
             "unreadable would risk the application's data and could create a stray empty database. A real outage "
             "needs the documented PostgreSQL full deployment, which requires Docker; Docker is not installed. "
-            "sqlite_write_lock is the supported, reversible database fault."
-        ),
-    ),
-    FaultSpec(
-        name="database_latency",
-        layer="infrastructure",
-        summary="Add bounded latency to database connections.",
-        params=(),
-        target_keys=("plant",),
-        expected_effects=(),
-        cleanup="not applicable",
-        recovery_criteria=(),
-        preconditions=(),
-        supported=False,
-        unsupported_reason=(
-            "SQLite is accessed in-process through a file; there is no network hop to delay. sqlite_write_lock "
-            "produces write latency up to the lock duration and is the closest honest equivalent."
+            "sqlite_write_lock and database_latency are the supported, reversible database faults."
         ),
     ),
     FaultSpec(
@@ -727,9 +830,9 @@ UNSUPPORTED = (
 
 FAULTS: dict[str, Fault] = {
     fault.spec.name: fault
-    for fault in (NoFault(), ProcessOutage(), ProcessFreeze(), CpuPressure(), SqliteWriteLock(), SimDown(),
-                  SimChangeover(), SimMicroStops(), SimCounterReset(), SimScrapBurst(), SimStarve(), SimBlock(),
-                  SimDisconnect())
+    for fault in (NoFault(), ProcessOutage(), ProcessFreeze(), CpuPressure(), SqliteWriteLock(), DatabaseLatency(),
+                  SimDown(), SimChangeover(), SimMicroStops(), SimCounterReset(), SimScrapBurst(), SimStarve(),
+                  SimBlock(), SimDisconnect())
 }
 UNSUPPORTED_BY_NAME: dict[str, FaultSpec] = {spec.name: spec for spec in UNSUPPORTED}
 

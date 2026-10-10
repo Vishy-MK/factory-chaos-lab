@@ -68,9 +68,14 @@ class MetricsAdapter:
                    "cpu_percent": row["cpu_percent"]}
             for name, row in table.items()
         }
+        sample["database"] = database_counters(self.plant.settings)
         host = resources.host_snapshot(cpu_interval=0.0)
         sample["host"] = host.as_dict()
         return sample
+
+    @staticmethod
+    def summarise_database_window(samples: list[dict], start: float, end: float) -> dict | None:
+        return summarise_database([s for s in samples if start <= s["t"] <= end])
 
     def summarise(self, samples: list[dict]) -> dict:
         if not samples:
@@ -107,6 +112,7 @@ class MetricsAdapter:
             "machines_total": next((s["machines"]["total"] for s in samples if s["machines"]["total"]), None),
             "floor_seconds_since_check_max": round(max(floor_age), 1) if floor_age else None,
             "tag_ingest_per_second": ingest,
+            "tag_ingest_stall_s_max": _longest_stall(ids),
             "tag_values_max_id_start": ids[0][1] if ids else None,
             "tag_values_max_id_end": ids[-1][1] if ids else None,
             "good_qty_end": good[-1] if good else None,
@@ -115,7 +121,146 @@ class MetricsAdapter:
             "component_rss_mb_max": rss,
             "host_available_memory_mb_min": round(min(s["host"]["available_memory_mb"] for s in samples), 1),
             "host_cpu_percent_max": round(max(s["host"]["cpu_percent"] for s in samples), 1),
+            "database": summarise_database(samples),
         }
+
+
+def _longest_stall(ids: list[tuple[float, int]]) -> float | None:
+    """Longest wall time inside the samples during which the newest tag id did not advance."""
+    if len(ids) < 2:
+        return None
+    longest, changed_at, last = 0.0, ids[0][0], ids[0][1]
+    for t, value in ids[1:]:
+        if value > last:
+            changed_at, last = t, value
+        longest = max(longest, t - changed_at)
+    return round(longest, 2)
+
+
+_DB_FIELDS = ("statements_total", "errors", "lock_errors", "observed_ms_total", "db_ms_total",
+              "injected_statements", "injected_ms_total", "injected_observed_ms_total")
+
+
+def database_counters(settings) -> dict | None:
+    """Cumulative counters of every live hooked process of the plant, keyed by pid; None if no hook reports."""
+    try:
+        from chaoslab.plant_names import chaoslab_dbhook
+
+        stats = chaoslab_dbhook.read_stats(str(settings.db_hook_dir))
+    except Exception:
+        return None
+    rows = {}
+    for row in stats:
+        if row.get("plant") != settings.plant_name:
+            continue
+        try:
+            rows[str(row["pid"])] = {
+                "component": row["component"], "statements_total": row["statements_total"],
+                "statements": row["statements"], "errors": row["errors"], "lock_errors": row["lock_errors"],
+                "observed_ms_total": row["observed_ms_total"], "db_ms_total": row["db_ms_total"],
+                "observed_histogram": row["observed_histogram"], "db_histogram": row["db_histogram"],
+                "injected_statements": row["injected"]["statements"],
+                "injected_ms_total": row["injected"]["ms_total"],
+                "injected_observed_ms_total": row["injected"].get("observed_ms_total", 0.0),
+                "activation_active": bool(row.get("control", {}).get("active")),
+            }
+        except (KeyError, TypeError):
+            continue
+    return rows or None
+
+
+def _histogram_bound(histogram: list[int], quantile: float) -> float | None:
+    from chaoslab.plant_names.chaoslab_dbhook import BUCKETS_MS
+
+    total = sum(histogram)
+    if not total:
+        return None
+    needed, running = quantile * total, 0
+    for index, count in enumerate(histogram):
+        running += count
+        if running >= needed:
+            return float(BUCKETS_MS[index]) if index < len(BUCKETS_MS) else None
+    return None
+
+
+def _histogram_summary(histogram: list[int]) -> dict:
+    from chaoslab.plant_names.chaoslab_dbhook import BUCKETS_MS
+
+    labels = [f"<={bound}" for bound in BUCKETS_MS] + [f">{BUCKETS_MS[-1]}"]
+    return {
+        "count": sum(histogram),
+        "p50_upper_bound": _histogram_bound(histogram, 0.50),
+        "p95_upper_bound": _histogram_bound(histogram, 0.95),
+        "p99_upper_bound": _histogram_bound(histogram, 0.99),
+        "buckets": {label: count for label, count in zip(labels, histogram) if count},
+    }
+
+
+def summarise_database(samples: list[dict]) -> dict | None:
+    """Direct database evidence between the first and last sample of the phase, from the hook's counters.
+
+    Percentiles come from fixed histogram buckets and are upper bounds (null above the last bucket); means are
+    exact. A process that started inside the phase is counted from zero.
+    """
+    with_db = [s for s in samples if s.get("database")]
+    if len(with_db) < 2 or with_db[-1]["t"] <= with_db[0]["t"]:
+        return None
+    first, last = with_db[0]["database"], with_db[-1]["database"]
+    window = with_db[-1]["t"] - with_db[0]["t"]
+    totals = dict.fromkeys(_DB_FIELDS, 0)
+    kinds: dict[str, int] = {}
+    observed, driver = None, None
+    per_component: dict[str, dict] = {}
+    for pid, end in last.items():
+        start = first.get(pid)
+        delta = {f: end[f] - (start[f] if start else 0) for f in _DB_FIELDS}
+        for field in _DB_FIELDS:
+            totals[field] += delta[field]
+        for kind, count in end["statements"].items():
+            kinds[kind] = kinds.get(kind, 0) + count - ((start or {}).get("statements") or {}).get(kind, 0)
+        for name, store in (("observed_histogram", "observed"), ("db_histogram", "driver")):
+            base = start[name] if start else [0] * len(end[name])
+            values = [a - b for a, b in zip(end[name], base)]
+            current = observed if store == "observed" else driver
+            merged = values if current is None else [a + b for a, b in zip(current, values)]
+            if store == "observed":
+                observed = merged
+            else:
+                driver = merged
+        component = per_component.setdefault(end["component"], {"statements": 0, "injected_statements": 0,
+                                                                 "observed_ms_total": 0.0})
+        component["statements"] += delta["statements_total"]
+        component["injected_statements"] += delta["injected_statements"]
+        component["observed_ms_total"] += delta["observed_ms_total"]
+    count = totals["statements_total"]
+    injected = totals["injected_statements"]
+    return {
+        "source": "chaoslab_dbhook: SQLAlchemy cursor execution in the plant's database clients",
+        "samples": len(with_db),
+        "window_s": round(window, 2),
+        "statements": count,
+        "statements_per_second": round(count / window, 2),
+        "by_kind": kinds,
+        "errors": totals["errors"],
+        "lock_errors": totals["lock_errors"],
+        "error_ratio": round(totals["errors"] / count, 4) if count else None,
+        "injected_statements": injected,
+        "injected_fraction": round(injected / count, 3) if count else None,
+        "injected_delay_ms_total": round(totals["injected_ms_total"], 1),
+        "injected_delay_ms_mean": round(totals["injected_ms_total"] / injected, 2) if injected else None,
+        "delayed_statement_ms_mean": round(totals["injected_observed_ms_total"] / injected, 3) if injected else None,
+        "statement_ms_mean": round(totals["observed_ms_total"] / count, 3) if count else None,
+        "driver_ms_mean": round(totals["db_ms_total"] / count, 3) if count else None,
+        "statement_ms": _histogram_summary(observed or []),
+        "driver_ms": _histogram_summary(driver or []),
+        "per_component": {
+            name: {"statements": row["statements"], "injected_statements": row["injected_statements"],
+                   "statement_ms_mean": round(row["observed_ms_total"] / row["statements"], 3)
+                   if row["statements"] else None}
+            for name, row in per_component.items()
+        },
+        "activation_seen": any(r.get("activation_active") for s in with_db for r in s["database"].values()),
+    }
 
 
 def _distribution(values: list[float]) -> dict | None:

@@ -372,6 +372,14 @@ class Controller:
             phase: self.metrics.summarise([s for s in all_samples if s["phase"] == phase])
             for phase in ("baseline", "fault", "recovery", "post")
         }
+        latency_steps = [s for s in step_results if s["type"] == "database_latency" and s.get("injected")]
+        if latency_steps:
+            evidence = self._database_latency_evidence(result["observed_metrics"], latency_steps, recovery_report,
+                                                       all_samples)
+            result["database_latency"] = evidence
+            if recovery_report:
+                recovery_report["stages"]["database_latency_restored"] = evidence["restored"]
+                recovery_report["recovered"] = recovery_report["recovered"] and evidence["restored"]["ok"]
         result["samples_file"] = "samples.jsonl"
         (run_dir / "samples.jsonl").write_text(
             "\n".join(json.dumps(s, separators=(",", ":")) for s in all_samples) + "\n", encoding="utf-8")
@@ -419,14 +427,85 @@ class Controller:
             return self._finish(result, tracker, State.FAILED, "injection_failed", injection_errors)
         report = result["recovery"]
         stages = report["stages"]
-        core = all(stages[s]["ok"] for s in ("fault_removed", "service_available", "operation_succeeds",
-                                              "manufacturing_behaviour"))
+        core_stages = ["fault_removed", "service_available", "operation_succeeds", "manufacturing_behaviour"]
+        if "database_latency_restored" in stages:
+            core_stages.append("database_latency_restored")
+        core = all(stages[s]["ok"] for s in core_stages)
         reasons = [f"{name}: {stage['detail']}" for name, stage in stages.items() if not stage["ok"]]
         if core and report["recovered"]:
             return self._finish(result, tracker, State.COMPLETED, "recovered", [])
         if core:
             return self._finish(result, tracker, State.COMPLETED, "recovered_with_data_findings", reasons)
         return self._finish(result, tracker, State.COMPLETED, "not_recovered", reasons)
+
+    #: Recovered database latency: mean statement duration after recovery may exceed the baseline mean by at most
+    #: max(LATENCY_TOLERANCE_MS, LATENCY_TOLERANCE_RATIO x baseline mean), with no injected statement.
+    LATENCY_TOLERANCE_MS = 25.0
+    LATENCY_TOLERANCE_RATIO = 0.5
+
+    def _database_latency_evidence(self, observed: dict, steps: list[dict], recovery: dict | None,
+                                   samples: list[dict] | None = None) -> dict:
+        def compact(summary: dict | None) -> dict | None:
+            if not summary:
+                return None
+            keys = ("samples", "window_s", "statements", "statements_per_second", "errors", "lock_errors",
+                    "error_ratio", "injected_statements", "injected_fraction", "injected_delay_ms_mean",
+                    "delayed_statement_ms_mean",
+                    "statement_ms_mean", "driver_ms_mean", "statement_ms", "per_component")
+            return {k: summary.get(k) for k in keys}
+
+        phases = ("baseline", "fault", "recovery", "post")
+        direct = {phase: compact((observed.get(phase) or {}).get("database")) for phase in phases}
+        # The "fault" phase also spans cleanup and removal verification; the window is only the activation.
+        record = steps[-1].get("record") or {}
+        window = None
+        if samples and record.get("activated_at") is not None:
+            start = float(record["activated_at"])
+            end = start + float(record.get("duration_s") or 0)
+            window = compact(self.metrics.summarise_database_window(samples, start, end))
+        direct["fault_window"] = window
+        downstream = {}
+        for phase in phases:
+            summary = observed.get(phase) or {}
+            if not summary.get("samples"):
+                downstream[phase] = None
+                continue
+            downstream[phase] = {k: summary.get(k) for k in (
+                "samples", "api_success_ratio", "authenticated_success_ratio", "api_latency_ms",
+                "tag_ingest_per_second", "tag_ingest_stall_s_max", "floor_seconds_since_check_max",
+                "machines_connected_min")}
+        baseline_mean = (direct["baseline"] or {}).get("statement_ms_mean")
+        # Exact: the hook times every delayed statement, so this needs no alignment with the sample clock.
+        fault_mean = (direct["fault"] or {}).get("delayed_statement_ms_mean")
+        post = direct["post"] or {}
+        post_mean = post.get("statement_ms_mean")
+        tolerance = None
+        if baseline_mean is None or post_mean is None:
+            restored = {"ok": False, "detail": "database statement latency after recovery is unavailable "
+                                               f"(baseline mean {baseline_mean}, post-recovery mean {post_mean})"}
+        else:
+            tolerance = round(max(self.LATENCY_TOLERANCE_MS, self.LATENCY_TOLERANCE_RATIO * baseline_mean), 3)
+            injected_after = post.get("injected_statements") or 0
+            ok = injected_after == 0 and post_mean <= baseline_mean + tolerance
+            restored = {"ok": ok, "detail": f"post-recovery mean statement {post_mean} ms vs baseline "
+                                            f"{baseline_mean} ms (tolerance +{tolerance} ms); injected statements "
+                                            f"after recovery: {injected_after}"}
+        return {
+            "configured_delay_ms": steps[-1]["parameters"].get("delay_ms"),
+            "configured_duration_s": steps[-1]["parameters"].get("duration_s"),
+            "delayed_statement_ms_mean": fault_mean,
+            "measured_added_statement_ms_mean": round(fault_mean - baseline_mean, 3)
+            if fault_mean is not None and baseline_mean is not None else None,
+            "direct_database": direct,
+            "downstream": downstream,
+            "time_to_recovery_s": (recovery or {}).get("duration_s"),
+            "tolerance_ms": tolerance,
+            "restored": restored,
+            "note": ("direct_database comes from the lab's SQLAlchemy hook inside the plant's database clients; "
+                     "downstream comes from the lab's own API probes and the plant's /metrics. Phase deltas run "
+                     "from the first to the last sample of each phase; fault_window covers only the samples inside "
+                     "the activation window, while the fault phase also spans cleanup and removal checks."),
+        }
 
     def _oee_snapshot(self) -> dict | None:
         states = self.plant.equipment_states()
@@ -452,7 +531,7 @@ class Controller:
         return snapshot
 
     def _infrastructure_limitations(self, experiment: Experiment) -> list[str]:
-        return [
+        notes = [
             "Single-host lightweight deployment: processes share one machine, so faults are process-level, not "
             "network- or container-level.",
             "Restarted components write their console output to runtime/logs/component-*.log instead of the "
@@ -463,6 +542,15 @@ class Controller:
             "such values are reported as unavailable, not zero.",
             "The upstream scoring harness only scores its own ephemeral replay and is not applied here.",
         ]
+        if any(step.fault_type == "database_latency" for step in experiment.steps):
+            notes += [
+                "database_latency delays SQL statements SQLAlchemy executes through a cursor in the api and "
+                "opc-agent; it does not delay connection creation, COMMIT/ROLLBACK, or direct sqlite3 access.",
+                "Database percentiles come from fixed histogram buckets and are upper bounds; means are exact.",
+                "A statement already sleeping when the window ends finishes its delay, so the fault can outlast "
+                "duration_s by at most one delay_ms.",
+            ]
+        return notes
 
     def _run_application(self, experiment: Experiment, decision: Decision, run_id: str, result: dict,
                          tracker: StateTracker) -> dict:

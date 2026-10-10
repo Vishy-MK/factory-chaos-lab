@@ -222,7 +222,7 @@ class LabApi:
 
         import psutil
 
-        from chaoslab.chaos.faults import FaultContext
+        from chaoslab.chaos.faults import FAULTS, FaultContext
 
         ctx = FaultContext(settings=self.settings, plant=self.controller.plant)
         actions = []
@@ -241,4 +241,8 @@ class LabApi:
                     actions.append({"action": "SIGTERM", "helper": cmdline[3], "pid": proc.pid})
             except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
                 continue
-        return {"ok": True, "actions": actions}
+        removal = FAULTS["database_latency"].cleanup(ctx, {"type": "database_latency"})
+        if removal.detail != "no activation present":
+            actions.append({"action": "remove database latency activation", "ok": removal.ok,
+                            "detail": removal.detail})
+        return {"ok": removal.ok, "actions": actions}

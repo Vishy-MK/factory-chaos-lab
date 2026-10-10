@@ -29,6 +29,7 @@ file.
 | Whole experiment wall time | 600 s | policy (estimate) and harness timeout 420 s |
 | CPU pressure | at most 80 % duty, 30 s | policy and the helper process clamps again |
 | Memory pressure | disabled | `memory_pressure` is listed as unsupported |
+| Database latency | at most 1000 ms per statement, 30 s; can be switched off | policy (`database_latency`); the hook clamps again to 2000 ms and a 120 s window |
 | Workload | at most 5 requests/s; high-volume profiles refused | policy and generator |
 | Available memory | refuse when below 1500 MB | resource gate before every experiment and before start |
 | Host CPU | refuse above 85 % | resource gate |
@@ -38,7 +39,8 @@ file.
 
 1. **Validate**: schema, then policy. Rejections are persisted as results with reasons.
 2. **Preflight**: host resources, plant health (API up, every machine connected, every component running), fault
-   preconditions (component present, database lock free).
+   preconditions (component present, database lock free; for database latency: hook loaded in every database
+   client and no activation file present).
 3. **Lease**: one active experiment at a time (`runtime/state/active.json`, atomic writes, stale leases from dead
    controllers are taken over).
 4. **Intent record before injection**: the lease lists what is about to be done before it is done, so cleanup is
@@ -47,9 +49,12 @@ file.
    records if the controller process disappears or the deadline passes, then exits. It is bound to the experiment id
    so it cannot act on a later experiment.
 6. **Self-limiting helpers**: the CPU burner and the SQLite lock holder end themselves at their deadline and clamp
-   to 120 s regardless of what they are told. If the controller and watchdog both died, they still stop.
+   to 120 s regardless of what they are told. The database latency hook ignores its activation once the
+   CLOCK_MONOTONIC deadline written into it has passed, if it is from another boot, or if its window exceeds 120 s.
+   If the controller and watchdog both died, all of them still stop.
 7. **Cleanup is verified**, not assumed: every fault has a separate `removed` check (process running, process not
-   stopped, lock acquirable, affinity restored, burner gone). A failed cleanup yields `unsafe_cleanup_failed` and no
+   stopped, lock acquirable, affinity restored, burner gone, latency activation absent and no further delayed
+   statement). A failed cleanup yields `unsafe_cleanup_failed` and no
    recovery claim.
 8. **Recovery is application evidence**: API up, an authenticated operation succeeds, every machine connected,
    the floor recording checks, tag ingestion advancing, database integrity check ok.
@@ -63,7 +68,8 @@ file.
 1. writes the stop flag; the running controller checks it every 250 ms in every wait and aborts, cleans up and
    records `aborted`;
 2. waits up to 20 s for the lease to be released; if it is not, it runs the lease's cleanup records itself;
-3. sweeps for stopped plant components (SIGCONT) and lab helper processes (SIGTERM).
+3. sweeps for stopped plant components (SIGCONT) and lab helper processes (SIGTERM), and removes any database
+   latency activation file, recorded in a lease or not.
 
 It does not restart components that are not part of an active lease, does not touch Docker, and does not touch
 unrelated services.
@@ -72,7 +78,8 @@ unrelated services.
 
 - No host firewall, route or traffic-shaping changes.
 - No Docker control and no Docker socket access (Docker is not installed).
-- No deleting or moving database files; the database fault only holds a lock and rolls back.
+- No deleting or moving database files; the write-lock fault only holds a lock and rolls back, and the latency
+   fault only adds sleeps before statements. Neither changes data.
 - No restart of anything outside the four plant components.
 - No exposure to the LAN: the plant API binds `127.0.0.1`, the exporter refuses a non-loopback bind, and the lab has
   no network-facing control API.
@@ -95,3 +102,5 @@ restores it. Signals are sent only to that user's processes. No `sudo`.
   prove those ports are free if an unrelated program took them.
 - The resource gate samples memory when an experiment starts. It does not stop an experiment if memory later falls.
 - The CPU pressure experiment shares the pinned CPU with whatever else the desktop is running on it.
+- The database latency hook runs inside the plant's api and opc-agent. It catches its own errors, but it is lab
+  code in the application's process; it is only loaded when the lab starts the plant with `CHAOSLAB_DB_HOOK_*` set.

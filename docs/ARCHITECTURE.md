@@ -41,6 +41,8 @@ chaoslab/
     recovery.py      staged recovery verification
     watchdog.py      independent cleanup process
     cleanup.py       cleanup from lease records (shared by controller, watchdog and emergency stop)
+  plant_names/       loaded into plant processes via PYTHONPATH: sitecustomize (process names) and
+                     chaoslab_dbhook (dormant SQLAlchemy latency hook in the database clients)
   workload/          bounded read-only request generator and profiles
   audit.py           audit log and the lease
   store.py           results, CSV export, comparison
@@ -56,6 +58,9 @@ validate (schema, policy) -> resource gate -> lease + watchdog -> preflight (hea
  -> baseline (sampler, workload) -> intent record -> inject -> hold -> cleanup + removal check
  -> recovery verification (stable for 3 samples) -> post window -> result.json
 ```
+
+`database_latency` injects by writing one activation file that the hook inside the api and opc-agent reads; the
+hook expires the delay at its own monotonic deadline. Details: `docs/DATABASE_LATENCY.md`.
 
 An application experiment replaces inject/hold with one call to `fsmes lab run` on a generated plan and derives its
 evidence from the harness's `scores.json` and per-look station states.

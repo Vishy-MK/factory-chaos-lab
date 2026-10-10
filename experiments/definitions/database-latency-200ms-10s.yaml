@@ -1,0 +1,28 @@
+name: database-latency-200ms-10s
+description: Add 200 ms before every plant database statement for 10 seconds, then remove the delay and verify the database is back to baseline latency.
+category: infrastructure
+target:
+  plant: bottling
+  resource: database
+fault:
+  type: database_latency
+  parameters:
+    delay_ms: 200
+    duration_s: 10
+baseline_s: 20
+workload: baseline
+preconditions:
+  - database_present
+  - hook_loaded
+  - no_activation_present
+expected_measurements:
+  - database_statement_ms
+  - injected_delay_ms
+  - api_latency_ms
+  - api_success_ratio
+  - tag_ingest_per_second
+  - tag_ingest_stall_s_max
+cleanup: remove the activation file (the hook also expires at its monotonic deadline); verify no further injected delay
+recovery:
+  timeout_s: 90
+scoring: none

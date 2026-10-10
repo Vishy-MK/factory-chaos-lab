@@ -101,7 +101,7 @@ def test_unknown_fault_type_rejected(validator):
     assert any("unknown fault type" in r for r in decision.reasons)
 
 
-@pytest.mark.parametrize("name", ["database_outage", "database_latency", "api_latency", "memory_pressure"])
+@pytest.mark.parametrize("name", ["database_outage", "api_latency", "memory_pressure"])
 def test_unsupported_faults_are_refused_with_a_reason(validator, name):
     decision = validator.validate(infra(name))
     assert not decision.allowed

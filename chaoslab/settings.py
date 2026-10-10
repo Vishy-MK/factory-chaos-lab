@@ -97,6 +97,11 @@ class Settings:
         return self.state_dir / "active.json"
 
     @cached_property
+    def db_hook_dir(self) -> Path:
+        """Activation and per-process counters of the database latency hook (chaoslab_dbhook)."""
+        return self.state_dir / "db-latency"
+
+    @cached_property
     def stop_flag(self) -> Path:
         return self.state_dir / "emergency-stop"
 
