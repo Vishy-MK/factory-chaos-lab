@@ -118,6 +118,8 @@ class AgentRun:
     stopped: str = "answered"
     rounds: int = 0
     transcript: list[dict] = field(default_factory=list)
+    #: The conversation so far, so a caller can continue it (validation feedback) instead of starting again.
+    messages: list[dict] = field(default_factory=list, repr=False)
 
     def as_dict(self) -> dict:
         return {"role": self.role, "task": self.task, "stopped": self.stopped, "rounds": self.rounds,
@@ -131,13 +133,27 @@ def extract_json(text: str) -> dict | None:
     if "{" in text and "}" in text:
         candidates.append(text[text.index("{"): text.rindex("}") + 1])
     for candidate in candidates:
-        try:
-            value = json.loads(candidate)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if isinstance(value, dict):
-            return value
+        # Models put raw line breaks inside strings and leave trailing commas; accept both, nothing looser.
+        for text in (candidate, re.sub(r",(\s*[}\]])", r"\1", candidate)):
+            try:
+                value = json.loads(text, strict=False)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if isinstance(value, dict):
+                return value
     return None
+
+
+def json_error(text: str) -> str:
+    """Why a reply is not a JSON object, for feedback to the model."""
+    start = text.find("{")
+    if start < 0:
+        return "the reply contains no JSON object"
+    try:
+        json.loads(text[start:text.rfind("}") + 1], strict=False)
+    except json.JSONDecodeError as exc:
+        return f"invalid JSON: {exc.msg} at line {exc.lineno} column {exc.colno}"
+    return "the reply is not a single JSON object"
 
 
 class Agent:
@@ -149,12 +165,24 @@ class Agent:
         self.approver = approver
         self.progress = progress or (lambda line: None)
 
-    async def run(self, task: str) -> AgentRun:
-        run = AgentRun(role=self.role.name, task=task)
+    async def run(self, task: str, resume: AgentRun | None = None, force_answer: bool = False) -> AgentRun:
+        """Run a task, or continue `resume` with `task` as the next user message (its rounds count on).
+
+        With force_answer, reaching the round limit asks once more for the final answer instead of giving up.
+        """
         specs = await self.toolbox.specs()
-        messages: list[dict[str, Any]] = [{"role": "system", "content": self.role.system_prompt},
-                                          {"role": "user", "content": task}]
-        for round_number in range(1, self.role.max_rounds + 1):
+        if resume is not None:
+            run = resume
+            run.output, run.final_text, run.stopped = None, "", "answered"
+            messages = run.messages
+            messages.append({"role": "user", "content": task})
+            first = run.rounds + 1
+        else:
+            run = AgentRun(role=self.role.name, task=task)
+            messages = [{"role": "system", "content": self.role.system_prompt}, {"role": "user", "content": task}]
+            run.messages = messages
+            first = 1
+        for round_number in range(first, first + self.role.max_rounds):
             run.rounds = round_number
             provider = getattr(getattr(self.llm, "config", None), "provider", "the model")
             proctitle.agent(self.role.name, f"round {round_number} | asking {provider}")
@@ -170,6 +198,18 @@ class Agent:
             for call in reply.tool_calls:
                 result = await self._dispatch(call.name, call.arguments, round_number, run)
                 messages.append({"role": "tool", "tool_call_id": call.id, "name": call.name, "content": result})
+        if force_answer:
+            messages.append({"role": "user", "content": "Round limit reached. Reply now with only the final JSON "
+                                                        "object in the required schema; do not call any tool."})
+            reply = await self.llm.chat(messages, specs)
+            messages.append(reply.as_message())
+            run.rounds += 1
+            run.output = extract_json(reply.content or "")
+            if run.output is not None:
+                run.final_text = reply.content
+                run.stopped = "forced_answer"
+                run.transcript.append({"round": run.rounds, "at": time.time(), "say": reply.content})
+                return run
         proctitle.agent(self.role.name, f"stopped after {self.role.max_rounds} rounds")
         run.stopped = "max_rounds"
         self.progress(f"[{self.role.name}] stopped after {self.role.max_rounds} rounds without a final answer")

@@ -25,7 +25,7 @@ def referenced_metrics() -> set[str]:
 
 def test_dashboards_exist_and_parse():
     files = sorted(DASHBOARDS.glob("*.json"))
-    assert len(files) == 4
+    assert len(files) == 6
     for path in files:
         data = json.loads(path.read_text())
         assert data["uid"] and data["title"] and data["panels"]

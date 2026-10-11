@@ -307,3 +307,11 @@ def test_inject_reports_emergency_stop_from_the_tool_calls_not_the_model(lab_roo
     _, payload = commands.inject(lab_root, "proposal", deny_all, llm=ScriptedLLM(
         calls(("emergency_stop", {})), answer({"experiment_name": "proposal", "outcome": "error"})))
     assert payload["output"]["emergency_stop_called"] is True
+
+
+def test_extract_json_tolerates_raw_newlines_and_trailing_commas():
+    from chaoslab.agents.runtime import json_error
+
+    assert extract_json('{"a": "line one\nline two", "b": [1, 2,],}') == {"a": "line one\nline two", "b": [1, 2]}
+    assert extract_json("no json here") is None
+    assert "line" in json_error('{"a": [1, 2}') and json_error("plain prose") == "the reply contains no JSON object"

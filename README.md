@@ -129,8 +129,10 @@ with its reason.
 
 ## Agents
 
-Two LLM agents drive the lab through the MCP tools above, called in-process. Mistral is the default provider;
-any OpenAI-compatible provider works the same way.
+Five LLM agents work through the MCP tools above, called in-process: they plan, inject, judge, explain and
+recommend, and each holds only the tools its job needs. Mistral is the default provider; any OpenAI-compatible
+provider works the same way. The key can live in `runtime/state/llm.env` (mode 600, ignored by git), e.g.
+`MISTRAL_API_KEY=...`; an exported variable takes precedence.
 
 ```bash
 export MISTRAL_API_KEY=...
@@ -144,6 +146,26 @@ python -m chaoslab agent analyze <experiment-id>         # verdict saved as resu
 |---|---|---|
 | Injector | checks health and resources, validates, dry-runs, runs one experiment, waits, emergency-stops if it hangs | plant/resource status, discovery, `validate_experiment`, `run_experiment`, `experiment_status`, `wait_for_experiment`, `emergency_stop` |
 | Recovery Analyst | judges recovery from recovery stages, metrics, logs, scoring and a baseline comparison; may disagree with the lab only with evidence | result tools, `list_runs`, `compare_runs`, `plant_status` (read only) |
+| Planner | proposes follow-up experiments from a failure analysis (retest a low-confidence weakness, check a fix's acceptance criteria, probe a related risk); every proposal is policy-checked and saved, never run | read tools, `validate_experiment`, `propose_experiment` (saves only), `list_proposals` |
+| Failure Impact Analyst | writes the narrative of `chaoslab analysis analyze` from the deterministic results; every claim cites a record that exists | `get_analysis` and result tools (read only) |
+| Recommender | concrete fixes per weakness with source locations it read itself (each re-checked against the file), tradeoffs, effort and acceptance criteria whose numbers must be measured values | `get_analysis`, `get_metrics`, `get_logs`, `read_source`, `search_source` (read only) |
+
+The cycle: `chaoslab analysis analyze <run>` (deterministic analysis, narrative, recommendations) ->
+`chaoslab plan propose <analysis-id>` (Planner) -> `chaoslab plan approve <proposal-id>` (a person; the Injector
+then runs it) -> analyse the new run.
+
+```bash
+python -m chaoslab analysis recommend <analysis-id>   # Recommender only
+python -m chaoslab plan propose <analysis-id>         # Planner: saves proposals, runs nothing
+python -m chaoslab plan list [--status proposed]
+python -m chaoslab plan approve <proposal-id>         # your approval: the Injector runs it (--direct: controller)
+python -m chaoslab plan reject <proposal-id> --reason "..."
+```
+
+Read-only and propose-only roles are enforced from the MCP tool annotations (`chaoslab/agents/restricted.py`): a
+role that lists a destructive tool cannot start, and a call outside the role is refused without running. Agent
+answers are schema-validated; a rejected answer is sent back with the problems and the same conversation
+continues (at most 3 attempts), and at the round limit the agent is asked once for its final answer.
 
 Enforced in code, not left to the prompt: an agent is offered only its own tools and a call to any other is
 refused; `run_experiment` without `dry_run` needs a person's approval (`--approve` gives it in advance; with no
@@ -248,8 +270,13 @@ Prometheus listens on `127.0.0.1:9090` and scrapes the lab exporter (`:9108`, `c
 memory is low. The controller does not depend on any of this.
 
 Grafana is on `http://127.0.0.1:3000` (user `admin`, password `GRAFANA_ADMIN_PASSWORD`, default `lab-only-grafana`).
-Dashboards: **Lab overview**, **Experiment comparison**, **Manufacturing resilience** and **Database and
-resources**. The last one shows the database latency hook (`chaoslab_db_*`: delay active and configured delay,
+Dashboards: **Lab overview**, **Experiment comparison**, **Manufacturing resilience**, **Database and
+resources**, **Injection impact** and **Agents**. **Injection impact** shows which services an injection affects:
+each service (MES API, Database, OPC UA server, machine connectivity, OPC agent / ingestion, shop floor, RAG
+backend) as normal / DEGRADED / DOWN / unknown, judged by the exporter against that service's own rolling baseline
+(the median while no experiment runs), with the measured reason and the injection target. **Agents** shows which
+agent runs and what it is doing now (from its process title), tool calls by agent and tool, refused calls, run
+outcomes and proposals waiting for approval. The last one shows the database latency hook (`chaoslab_db_*`: delay active and configured delay,
 statements per second, mean total vs driver time per statement, a histogram p95, delayed statements, errors and
 "database is locked" errors per database client) and the cgroup counters of components in their lab scope
 (`chaoslab_cgroup_*`: limits, CPU used vs quota, throttled ratio, memory vs `memory.high`/`memory.max`, memory events

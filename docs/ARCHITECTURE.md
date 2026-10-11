@@ -51,6 +51,11 @@ chaoslab/
   api.py             the contract for a future caller (see below)
   cli.py             `python -m chaoslab ...`
   report.py          parameters, outcome and per-phase metrics table of one result (`chaoslab report`)
+  planning.py        Planner proposals (policy-checked, saved, run only after `chaoslab plan approve`)
+  agents/            runtime, roles (Injector, Recovery Analyst, Planner), restricted tool boxes
+  analysis/          ... plus recommender.py (Recommender agent) and source.py (bounded upstream source reads)
+  observability/     exporter (incl. database, cgroup, impact and agent metrics) and impact.py (service status)
+  deploy/            LAN gateway, control API, MES password rotation
   analysis/          read-only failure impact analysis: evidence, baseline, comparisons, findings, fixes, score,
                      read-only narrative agent (docs/FAILURE_ANALYSIS.md); writes only results/analysis/
 ```

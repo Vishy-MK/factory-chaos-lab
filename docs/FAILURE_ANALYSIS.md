@@ -137,6 +137,18 @@ conditions, not the application in general.
   the run's `result.json`, its samples or log files). Invalid answers are retried at most 3 times, then the narrative
   is marked `incomplete`. Model failure never affects the deterministic results and never triggers anything.
 
+## Recommender agent
+
+`chaoslab analysis recommend <analysis-id>` (also run by `analyze` unless `--no-narrative`) asks the read-only
+Recommender for one fix per weakness. It reads the analysis, metrics, logs and the upstream source with
+`read_source` / `search_source` (bounded, inside `factorysemantics-mes/src/fsmes` only). Its answer is rejected and
+sent back unless: every weakness has a recommendation or a reason; every cited location's excerpt is on that line of
+the real file; every acceptance criterion states a number or an exact comparison; every number with a unit
+(ms, s, tags/s, statements/s, any rate) is a measured value of the analysis or a simple scaling of one (sums only for
+latencies, as in "baseline p95 + 3 x delay"); evidence references resolve; nothing claims a fix was applied. The
+result is `recommendations.json` and a report section; the engine's own deterministic recommendations stay as they
+are.
+
 ## Artifacts
 
 `results/analysis/<analysis-id>/`: `analysis.json` (deterministic, machine-readable), `report.md` (summary and
@@ -184,5 +196,5 @@ The LLM never computes a number.
 - An integrity pass shows file consistency, not that no business operation was lost. Process liveness is never
   used as recovery evidence.
 - Recommended fixes are not applied and their acceptance criteria are not tested by this tool.
-- The AI narrative has not been run against a real model in this environment (no LLM key). It is tested with
-  deterministic scripted model responses.
+- The narrative and the Recommender have run against Mistral `ministral-14b-latest`; they often need a second or
+  third attempt to pass validation. Automated tests use deterministic scripted model responses.

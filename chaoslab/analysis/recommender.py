@@ -58,6 +58,104 @@ ROLE = Role(name="recommender",
             system_prompt=SYSTEM_PROMPT, max_rounds=16)
 
 
+# A number with a unit: "<n> ms", "<n> s", "<n> <things>/s", "<n> <things> per second".
+UNIT = re.compile(r"(\d+(?:[.,]\d+)?)\s*(?:(ms|milliseconds?|seconds?|s)\b|([a-z_ ]{0,24}?)\s*"
+                  r"(?:/\s*s(?:ec(?:ond)?)?\b|per\s+second))", re.IGNORECASE)
+#: A criterion is measurable when it states a number, or an exact comparison (equals, zero, none, every ...).
+MEASURABLE = re.compile(r"\d|\b(zero|none|no\s+\w+\s+(lost|dropped|missed)|equals?|equal\s+to|all|every)\b",
+                        re.IGNORECASE)
+TAG_WORDS = ("tag", "reading", "value", "row", "sample", "booking")
+STATEMENT_WORDS = ("statement", "quer", "write", "transaction", "commit")
+
+
+def quoted(criterion: str) -> list[tuple[float, str | None]]:
+    """(value, unit family or 'rate' for an unrecognised rate) for every number with a unit in the text."""
+    out = []
+    for raw, time_unit, things in UNIT.findall(criterion):
+        value = float(raw.replace(",", "."))
+        if time_unit:
+            out.append((value, "ms" if time_unit.lower().startswith("m") else "s"))
+        else:
+            words = things.lower()
+            kind = "rate_tags" if any(w in words for w in TAG_WORDS) else \
+                "rate_statements" if any(w in words for w in STATEMENT_WORDS) else "rate"
+            out.append((value, kind))
+    return out
+
+
+def _numbers(node, out: set[float]) -> None:
+    if isinstance(node, bool) or node is None:
+        return
+    if isinstance(node, (int, float)):
+        out.add(float(node))
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            if key not in ("count", "samples", "statements", "method"):
+                _numbers(value, out)
+    elif isinstance(node, list):
+        for value in node:
+            _numbers(value, out)
+
+
+#: unit family -> metric ids (and fault parameters) whose values a recommendation may quote in that unit
+FAMILIES = {
+    "rate_tags": ("tag_ingest_per_second",),
+    "rate_statements": ("db_statements_per_second",),
+    "ms": ("api_latency_ms", "db_statement_ms_mean", "db_driver_ms_mean", "db_injected_delay_ms_mean",
+           "db_delayed_statement_ms_mean", "db_statement_ms_p95_bound", "delay_ms"),
+    "s": ("tag_ingest_stall_max_s", "floor_age_max_s", "telemetry_age_max_s", "duration_s", "seconds_after_fault_end",
+          "window_s", "requested_s"),
+}
+
+
+def family(unit: str) -> str | None:
+    unit = unit.lower().replace(" ", "")
+    if unit.startswith("tag"):
+        return "rate_tags"
+    if unit.startswith("statement"):
+        return "rate_statements"
+    if unit in ("ms", "millisecond", "milliseconds"):
+        return "ms"
+    if unit in ("s", "second", "seconds"):
+        return "s"
+    return None
+
+
+def measured_numbers(analysis: dict) -> dict[str, set[float]]:
+    """Per unit family, the measured values (and fault parameters) a recommendation may quote."""
+    found = {name: set() for name in FAMILIES}
+
+    def visit(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                for name, ids in FAMILIES.items():
+                    if key in ids:
+                        _numbers(value, found[name])
+                visit(value)
+        elif isinstance(node, list):
+            for value in node:
+                visit(value)
+
+    for key in ("windows", "comparisons", "recovery", "observed_fault_duration_s"):
+        visit(analysis.get(key))
+    visit({"parameters": analysis["inputs"]["experiment"]["fault"].get("parameters")})
+    return found
+
+
+SCALES = (0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.2, 1.25, 1.5, 2.0, 3.0, 5.0)
+
+
+def grounded(value: float, numbers: set[float], sums: bool = False) -> bool:
+    """value is a measured number of the same unit or a simple scale of one (within 2%). With sums (latencies
+    only), also one plus k x another, which is how "baseline p95 + 3 x delay" is written."""
+    def close(a, b):
+        return abs(a - b) <= max(0.02 * abs(b), 0.05)
+    values = [v for v in numbers if v == v]
+    if any(close(value, f * x) for x in values for f in SCALES):
+        return True
+    return sums and any(close(value, x + k * y) for x in values for y in values for k in (1, 2, 3, 5))
+
+
 def validate(output: Any, analysis: dict, resolve, settings) -> list[str]:
     from chaoslab.analysis import source
 
@@ -74,6 +172,18 @@ def validate(output: Any, analysis: dict, resolve, settings) -> list[str]:
         problems.append(f"analysis_id must be {analysis.get('analysis_id')!r}")
     weaknesses = {f["id"] for f in analysis["findings"] if f["type"] == "weakness"}
     seen: list[str] = []
+    for rec in output["recommendations"]:
+        if isinstance(rec, dict):
+            # Accept an enum value whose first word is unambiguous ("Unverified (hypothesis)" -> unverified).
+            for key, allowed in (("effort", EFFORTS), ("confidence", CONFIDENCE),
+                                 ("cause_status", {"verified", "supported", "unverified"})):
+                value = str(rec.get(key) or "").strip().lower()
+                first = re.split(r"[^a-z]+", value)[0] if value else ""
+                if key == "cause_status" and first in ("plausible", "hypothesis", "hypothesised", "likely",
+                                                       "inferred", "unknown"):
+                    first = "unverified"
+                if value not in allowed and first in allowed:
+                    rec[key] = first
     for index, rec in enumerate(output["recommendations"]):
         where = f"recommendations[{index}]"
         if not isinstance(rec, dict):
@@ -90,11 +200,22 @@ def validate(output: Any, analysis: dict, resolve, settings) -> list[str]:
         if rec.get("confidence") not in CONFIDENCE:
             problems.append(f"{where}.confidence must be one of {sorted(CONFIDENCE)}")
         if rec.get("cause_status") not in ("verified", "supported", "unverified"):
-            problems.append(f"{where}.cause_status must be verified, supported or unverified")
+            problems.append(f"{where}.cause_status is {rec.get('cause_status')!r}; it must be exactly one of "
+                            "\"verified\", \"supported\" or \"unverified\"")
         criteria = rec.get("acceptance_criteria")
-        if not isinstance(criteria, list) or not criteria or not all(
-                isinstance(c, str) and re.search(r"\d", c) for c in criteria):
-            problems.append(f"{where}.acceptance_criteria must be measurable statements, each with a number")
+        if not isinstance(criteria, list) or not criteria or not all(isinstance(c, str) and MEASURABLE.search(c)
+                                                                     for c in criteria):
+            problems.append(f"{where}.acceptance_criteria must be a list of strings, each with a number or an exact comparison "
+                            f"(got {criteria!r:.120})")
+        if isinstance(criteria, list):
+            numbers = measured_numbers(analysis)
+            for criterion in criteria:
+                for value, kind in quoted(str(criterion)):
+                    pool = numbers["rate_tags"] | numbers["rate_statements"] if kind == "rate" else numbers[kind]
+                    if value > 2 and not grounded(value, pool, sums=kind == "ms"):
+                        known = ", ".join(f"{v:g}" for v in sorted(pool)[:12])
+                        problems.append(f"{where}: {value:g} ({kind}) in '{criterion[:80]}' is not a measured value "
+                                        f"of this analysis; the measured {kind} values are: {known}")
         evidence = rec.get("evidence")
         if not isinstance(evidence, list) or not evidence:
             problems.append(f"{where}.evidence must list analysis references")
@@ -111,6 +232,10 @@ def validate(output: Any, analysis: dict, resolve, settings) -> list[str]:
         text = " ".join(str(rec.get(k, "")) for k in ("remediation", "rationale")).lower()
         if re.search(r"\b(i|we) (applied|implemented|fixed|deployed)\b", text):
             problems.append(f"{where} claims a fix was applied; recommend only")
+    positives = {f["id"] for f in analysis["findings"] if f["type"] == "positive"}
+    # Positive findings need no fix; listing them is harmless, so drop them rather than fail the answer.
+    output["not_recommended"] = [i for i in output["not_recommended"]
+                                 if not (isinstance(i, dict) and i.get("finding_id") in positives)]
     for index, item in enumerate(output["not_recommended"]):
         if not isinstance(item, dict) or item.get("finding_id") not in weaknesses or not item.get("reason"):
             problems.append(f"not_recommended[{index}] needs a weakness finding_id and a reason")
@@ -140,24 +265,54 @@ def run(root, settings, analysis: dict, resolve, llm=None, max_attempts: int = 3
     except LLMError as exc:
         return {"status": "incomplete", "error": f"no model configured: {exc}", "attempts": attempts}
     toolbox = ReadOnlyToolBox(build_server(root), ROLE.tools)
+    first_task = (f"Recommend fixes for the weaknesses of analysis {analysis['analysis_id']!r}. Start with "
+                  "get_analysis section findings. Use at most 8 source tool calls in total, then answer.")
+
+    import logging
+
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    agent = Agent(ROLE, client, toolbox, deny_all)
+    agent_run = None
     feedback = ""
     for attempt in range(1, max_attempts + 1):
-        task = (f"Recommend fixes for the weaknesses of analysis {analysis['analysis_id']!r}. Start with get_analysis "
-                "section findings." + feedback)
+        # A retry continues the same conversation with the validation feedback, so what the agent already read
+        # is not thrown away.
+        task = first_task if agent_run is None else feedback
         try:
-            agent_run = asyncio.run(Agent(ROLE, client, toolbox, deny_all).run(task))
+            agent_run = asyncio.run(agent.run(task, resume=agent_run, force_answer=True))
         except LLMError as exc:
             attempts.append({"attempt": attempt, "error": f"model call failed: {exc}"})
             continue
         except PermissionError as exc:
             return {"status": "incomplete", "error": str(exc), "attempts": attempts}
         problems = validate(agent_run.output, analysis, resolve, settings)
+        if agent_run.output is None:
+            from chaoslab.agents.runtime import json_error
+
+            problems = [json_error(agent_run.final_text or "")]
         attempts.append({"attempt": attempt, "rounds": agent_run.rounds, "stopped": agent_run.stopped,
-                         "problems": problems, "tool_calls": [c.get("tool") for c in agent_run.transcript
-                                                              if c.get("tool")]})
+                         "problems": problems,
+                         "refused_calls": [c.get("tool") for c in agent_run.transcript
+                                           if str(c.get("result", "")).startswith("ERROR") and c.get("tool")],
+                         "tool_calls": [c.get("tool") for c in agent_run.transcript if c.get("tool")],
+                         "answer": None if not problems else agent_run.output})
         if not problems:
+            _save(root, agent_run)
             return {"status": "complete", "output": agent_run.output, "attempts": attempts,
                     "transcript": agent_run.transcript}
-        feedback = (" Your previous answer was rejected by validation: " + "; ".join(problems[:10]) +
-                    ". Fix these and answer again with the same schema.")
-    return {"status": "incomplete", "error": "no valid recommendations within the attempt limit", "attempts": attempts}
+        feedback = ("Your answer was rejected by validation: " + "; ".join(problems[:10]) +
+                    ". Fix exactly these problems and reply with the corrected final JSON object, same schema.")
+    if agent_run is not None:
+        _save(root, agent_run)
+    return {"status": "incomplete", "error": "no valid answer within the attempt limit", "attempts": attempts}
+
+
+def _save(root, agent_run) -> None:
+    """Keep the transcript with the other agents' (runtime/state/agents/), where the exporter counts tool calls."""
+    from chaoslab import settings as settings_module
+    from chaoslab.agents.runtime import save_transcript
+
+    try:
+        save_transcript(settings_module.load(root).state_dir / "agents", agent_run)
+    except Exception:
+        pass

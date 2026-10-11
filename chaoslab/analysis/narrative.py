@@ -211,32 +211,60 @@ def run(root, analysis: dict, resolve, llm=None, max_attempts: int = 3) -> dict:
     from chaoslab.agents.llm import ChatClient, LLMConfig, LLMError
     from chaoslab.mcp_server import build_server
 
-    attempts = []
-    feedback = ""
+    attempts: list[dict] = []
     try:
         client = llm or ChatClient(LLMConfig.from_env())
     except LLMError as exc:
         return {"status": "incomplete", "error": f"no model configured: {exc}", "attempts": attempts}
     toolbox = ReadOnlyToolBox(build_server(root), ROLE.tools)
+    first_task = (f"Analyse the stored failure impact analysis {analysis['analysis_id']!r}. Start with get_analysis "
+                  "section summary, then refs and findings.")
+
+    import logging
+
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    agent = Agent(ROLE, client, toolbox, deny_all)
+    agent_run = None
+    feedback = ""
     for attempt in range(1, max_attempts + 1):
-        task = (f"Analyse the stored failure impact analysis {analysis['analysis_id']!r}. Start with get_analysis "
-                "section summary, then refs and findings." + feedback)
+        # A retry continues the same conversation with the validation feedback, so what the agent already read
+        # is not thrown away.
+        task = first_task if agent_run is None else feedback
         try:
-            agent_run = asyncio.run(Agent(ROLE, client, toolbox, deny_all).run(task))
+            agent_run = asyncio.run(agent.run(task, resume=agent_run, force_answer=True))
         except LLMError as exc:
             attempts.append({"attempt": attempt, "error": f"model call failed: {exc}"})
             continue
         except PermissionError as exc:
             return {"status": "incomplete", "error": str(exc), "attempts": attempts}
-        refused = [c for c in agent_run.transcript if str(c.get("result", "")).startswith("ERROR") and
-                   c.get("tool") in FORBIDDEN_TOOLS | {None}]
         problems = validate(agent_run.output, analysis, resolve)
+        if agent_run.output is None:
+            from chaoslab.agents.runtime import json_error
+
+            problems = [json_error(agent_run.final_text or "")]
         attempts.append({"attempt": attempt, "rounds": agent_run.rounds, "stopped": agent_run.stopped,
-                         "problems": problems, "refused_calls": [c.get("tool") for c in refused],
-                         "tool_calls": [c.get("tool") for c in agent_run.transcript if c.get("tool")]})
+                         "problems": problems,
+                         "refused_calls": [c.get("tool") for c in agent_run.transcript
+                                           if str(c.get("result", "")).startswith("ERROR") and c.get("tool")],
+                         "tool_calls": [c.get("tool") for c in agent_run.transcript if c.get("tool")],
+                         "answer": None if not problems else agent_run.output})
         if not problems:
+            _save(root, agent_run)
             return {"status": "complete", "output": agent_run.output, "attempts": attempts,
                     "transcript": agent_run.transcript}
-        feedback = (" Your previous answer was rejected by validation: " + "; ".join(problems[:8]) +
-                    ". Answer again with the same schema, citing only references from section refs.")
-    return {"status": "incomplete", "error": "no valid narrative within the attempt limit", "attempts": attempts}
+        feedback = ("Your answer was rejected by validation: " + "; ".join(problems[:10]) +
+                    ". Fix exactly these problems and reply with the corrected final JSON object, same schema.")
+    if agent_run is not None:
+        _save(root, agent_run)
+    return {"status": "incomplete", "error": "no valid answer within the attempt limit", "attempts": attempts}
+
+
+def _save(root, agent_run) -> None:
+    """Keep the transcript with the other agents' (runtime/state/agents/), where the exporter counts tool calls."""
+    from chaoslab import settings as settings_module
+    from chaoslab.agents.runtime import save_transcript
+
+    try:
+        save_transcript(settings_module.load(root).state_dir / "agents", agent_run)
+    except Exception:
+        pass

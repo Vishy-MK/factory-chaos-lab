@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import urllib.request
 import signal
 import threading
 import time
@@ -36,6 +37,10 @@ class Collector:
         self._api_lock = threading.Lock()
         self._api_thread: threading.Thread | None = None
         self._api_stop = threading.Event()
+        from chaoslab.observability.impact import ImpactTracker
+
+        self.impact = ImpactTracker()
+        self._transcripts: dict[str, tuple[float, dict]] = {}
 
     def render(self) -> str:
         with self._lock:
@@ -52,7 +57,7 @@ class Collector:
 
         rows = _database_rows(chaoslab_dbhook.read_stats(str(self.settings.db_hook_dir)), plant)
         if not rows:
-            return
+            return {}
         control = chaoslab_dbhook.read_control(str(self.settings.db_hook_dir)) or {}
         gauge("chaoslab_db_delay_active", "1 while the database latency hook is delaying this component's statements",
               [({"plant": plant, "component": c}, 1.0 if r["active"] else 0.0) for c, r in rows.items()])
@@ -88,6 +93,7 @@ class Collector:
             lines.append(f'{name}_bucket{{plant="{_escape(plant)}",component="{_escape(component)}",le="+Inf"}} {total}')
             lines.append(f'{name}_sum{{plant="{_escape(plant)}",component="{_escape(component)}"}} {r["observed_ms"] / 1000.0:.15g}')
             lines.append(f'{name}_count{{plant="{_escape(plant)}",component="{_escape(component)}"}} {total}')
+        return rows
 
     def _cgroups(self, gauge, plant: str, table: dict[str, dict]) -> None:
         """cgroup v2 counters of components running in their lab scope (resource_limit)."""
@@ -100,7 +106,7 @@ class Collector:
             if stats:
                 scoped[component] = stats
         if not scoped:
-            return
+            return {}
 
         def rows(getter):
             out = []
@@ -146,6 +152,90 @@ class Collector:
               [({"plant": plant, "component": c, "resource": r},
                 ((s.get(f"{r}_pressure") or {}).get("some") or {}).get("total_us", 0) / 1e6)
                for c, s in scoped.items() for r in ("cpu", "memory") if s.get(f"{r}_pressure")], kind="counter")
+        return scoped
+
+    def _impact(self, gauge, plant: str, probed: list, table: dict, db_rows: dict, scoped: dict) -> None:
+        """Per-service status for the injection impact dashboard."""
+        from chaoslab.observability import impact
+
+        values = {name: rows[0][1] for name, _, rows in probed if rows}
+        up = values.get("chaoslab_plant_up")
+        probe = {"plant_up": None if up is None else up == 1.0, "api_latency_s": values.get("chaoslab_api_health_latency_seconds"),
+                 "machines_connected": values.get("chaoslab_machines_connected"),
+                 "machines_total": values.get("chaoslab_machines_total"),
+                 "floor_age_s": values.get("chaoslab_floor_seconds_since_check"),
+                 "tag_id": values.get("chaoslab_plant_tag_values_max_id")}
+        rag = values.get("chaoslab_rag_backend_up")
+        active = self.lease.active()
+        status = self.impact.evaluate(probe, table, db_rows, scoped, None if rag is None else rag == 1.0, bool(active))
+        names = {impact.NORMAL: "normal", impact.DEGRADED: "degraded", impact.DOWN: "down", impact.UNKNOWN: "unknown"}
+        gauge("chaoslab_service_impact", "service status: 0 normal, 1 degraded, 2 down, -1 unknown",
+              [({"plant": plant, "service": name}, float(v["status"])) for name, v in status.items()])
+        gauge("chaoslab_service_impact_info", "service status with the measured reason",
+              [({"plant": plant, "service": name, "status": names[v["status"]], "reason": v["reason"][:160]}, 1.0)
+               for name, v in status.items()])
+        targets = impact.target_service((active or {}).get("records", [])) if active else []
+        gauge("chaoslab_injection_target", "the service the active injection targets",
+              [({"plant": plant, "fault": fault, "service": service,
+                 "experiment": (active or {}).get("name", "")}, 1.0) for fault, service in targets])
+
+    def _agents(self, gauge) -> None:
+        """Live agent activity from process titles, and tool calls from saved transcripts."""
+        import psutil
+
+        active = []
+        for proc in psutil.process_iter(["cmdline"]):
+            try:
+                title = " ".join(proc.info["cmdline"] or [])
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+            if title.startswith("cl:agent "):
+                role, _, doing = title[len("cl:agent "):].partition(" | ")
+                active.append((role.strip(), doing.strip()))
+        roles = ("planner", "injector", "analyst", "failure-analyst", "recommender")
+        gauge("chaoslab_agent_active", "1 while an agent of this role is running",
+              [({"role": r}, 1.0 if any(a[0] == r for a in active) else 0.0) for r in roles])
+        gauge("chaoslab_agent_activity_info", "what a running agent is doing now (from its process title)",
+              [({"role": role, "activity": doing[:120]}, 1.0) for role, doing in active])
+        runs: dict[tuple, float] = {}
+        calls: dict[tuple, float] = {}
+        last: dict[str, float] = {}
+        directory = self.settings.state_dir / "agents"
+        for path in sorted(directory.glob("*.json"))[-500:] if directory.is_dir() else []:
+            try:
+                mtime = path.stat().st_mtime
+                cached = self._transcripts.get(path.name)
+                if not cached or cached[0] != mtime:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    cached = (mtime, {"role": data.get("role"), "stopped": data.get("stopped"),
+                                      "calls": [(c.get("tool"), "refused" if str(c.get("result", "")).startswith(
+                                          ("ERROR", "DENIED")) else "ok") for c in data.get("transcript", [])
+                                          if c.get("tool")]})
+                    self._transcripts[path.name] = cached
+            except (OSError, ValueError):
+                continue
+            info = cached[1]
+            runs[(info["role"], info["stopped"])] = runs.get((info["role"], info["stopped"]), 0) + 1
+            for tool, outcome in info["calls"]:
+                key = (info["role"], tool, outcome)
+                calls[key] = calls.get(key, 0) + 1
+            last[info["role"]] = max(last.get(info["role"], 0.0), cached[0])
+        gauge("chaoslab_agent_runs_total", "finished agent runs by role and how they stopped",
+              [({"role": r, "stopped": s or "unknown"}, v) for (r, s), v in runs.items()], kind="counter")
+        gauge("chaoslab_agent_tool_calls_total", "tool calls by agent role, tool and outcome (ok or refused)",
+              [({"role": r, "tool": t, "outcome": o}, v) for (r, t, o), v in calls.items()], kind="counter")
+        gauge("chaoslab_agent_last_run_timestamp_seconds", "when an agent of this role last finished",
+              [({"role": r}, v) for r, v in last.items()])
+        try:
+            from chaoslab import planning
+
+            counts: dict[str, int] = {}
+            for proposal in planning.list_proposals(self.settings):
+                counts[proposal["status"]] = counts.get(proposal["status"], 0) + 1
+            gauge("chaoslab_plan_proposals", "Planner proposals by status",
+                  [({"status": k}, float(counts.get(k, 0))) for k in ("proposed", "approved", "rejected", "ran")])
+        except Exception:
+            pass
 
     def _probe_api(self) -> list[tuple[str, str, list]]:
         """One round of plant API probes, as (metric, help, rows) for the scrape to render."""
@@ -178,13 +268,38 @@ class Collector:
                 if summary.body.get("scrap_qty") is not None:
                     out.append(("chaoslab_scrap_quantity", "scrap units booked across work orders",
                                 [({"plant": plant}, float(summary.body.get("scrap_qty") or 0))]))
+            metrics = self.plant.metrics_text()
+            if metrics.ok and isinstance(metrics.body, str):
+                from chaoslab.adapters.factorysemantics import parse_prometheus
+
+                ids = [v for n, _, v in parse_prometheus(metrics.body) if n == "mes_tag_values_max_id"]
+                if ids:
+                    out.append(("chaoslab_plant_tag_values_max_id", "newest ingested tag value id (from the plant's "
+                                "/metrics)", [({"plant": plant}, float(max(ids)))]))
             states = self.plant.equipment_states()
             if states.ok and isinstance(states.body, list):
                 out.append(("chaoslab_equipment_state_code",
                             "machine state code: 0 stopped, 1 running, 2 starved, 3 blocked, 4 down, 5 changeover",
                             [({"plant": plant, "equipment": row["equipment"]}, float(STATE_CODES[row["state"]]))
                              for row in states.body if row["state"] in STATE_CODES]))
+        rag = self._rag_up()
+        if rag is not None:
+            out.append(("chaoslab_rag_backend_up", "1 when the deployed RAG backend answers /health",
+                        [({}, 1.0 if rag else 0.0)]))
         return out
+
+    def _rag_up(self) -> bool | None:
+        """Health of the RAG backend when scripts/deploy-lan.sh runs it; None when it is not deployed."""
+        if not (self.settings.state_dir / "rag-backend.pid").is_file():
+            return None
+        try:
+            import yaml
+
+            port = yaml.safe_load((self.settings.root / "config" / "deployment.yaml").read_text())["rag_backend"]["port"]
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1.5) as response:
+                return response.status == 200
+        except Exception:
+            return False
 
     def _api_loop(self) -> None:
         while not self._api_stop.is_set():
@@ -251,8 +366,11 @@ class Collector:
               [({"plant": plant, "component": name}, row["cpu_percent"]) for name, row in table.items()
                if row["cpu_percent"] is not None])
 
-        self._database(gauge, lines, plant)
-        self._cgroups(gauge, plant, table)
+        db_rows = self._database(gauge, lines, plant)
+        scoped = self._cgroups(gauge, plant, table)
+        self._impact(gauge, plant, probed if age is not None and age <= self.api_stale_s else [], table, db_rows,
+                     scoped)
+        self._agents(gauge)
 
         host = resources.host_snapshot(cpu_interval=0.0)
         gauge("chaoslab_host_memory_available_bytes", "host MemAvailable", [({}, host.available_mb * 1048576)])

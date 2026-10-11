@@ -220,3 +220,54 @@ resources_board.timeseries("Pressure stall (share of time)", [
     target("rate(chaoslab_cgroup_pressure_stall_seconds_total[30s])", "{{component}} {{resource}}")],
     unit="percentunit", minimum=0, description="PSI 'some': time at least one task in the scope was stalled.")
 resources_board.write("database-and-resources.json")
+
+IMPACT = [{"type": "value", "options": {
+    "-1": {"text": "unknown", "color": "text"}, "0": {"text": "normal", "color": "green"},
+    "1": {"text": "DEGRADED", "color": "orange"}, "2": {"text": "DOWN", "color": "red"}}}]
+
+impact = Board("chaoslab-impact", "Injection impact", ["chaoslab", "impact"])
+impact.stat("Injection target", [target("chaoslab_injection_target", "{{fault}} -> {{service}}")], width=8,
+            mappings=[{"type": "value", "options": {"1": {"text": "ACTIVE", "color": "orange"}}}],
+            description="Absent while no experiment holds the lease.")
+impact.stat("Services degraded", [target("count(chaoslab_service_impact == 1) or vector(0)", "degraded")], width=4,
+            decimals=0)
+impact.stat("Services down", [target("count(chaoslab_service_impact == 2) or vector(0)", "down")], width=4,
+            decimals=0)
+impact.stat("Experiment", [target("chaoslab_experiment_active", "state")], mappings=ACTIVE, width=8)
+impact.state_timeline("Service status (each against its own baseline)",
+                      [target("chaoslab_service_impact", "{{service}}")], IMPACT,
+                      description="normal / DEGRADED / DOWN per service, judged by the exporter from its own probes "
+                                  "against each service's rolling baseline; unknown when not measured.")
+impact.table("Now: status and measured reason", [target("chaoslab_service_impact_info", "info")], width=24,
+             description="The reason is what was measured, e.g. '/health 1210 ms vs limit 120 ms'.")
+impact.timeseries("API /health latency", [target("chaoslab_api_health_latency_seconds", "{{plant}}")], unit="s",
+                  width=8)
+impact.timeseries("Tag ingestion", [target("rate(chaoslab_plant_tag_values_max_id[30s])", "tags / s")], width=8,
+                  minimum=0)
+impact.timeseries("Database statement time", [
+    target("sum(rate(chaoslab_db_statement_seconds_total[30s])) / sum(rate(chaoslab_db_statements_total[30s]))",
+           "mean")], unit="s", width=8)
+impact.write("injection-impact.json")
+
+agents = Board("chaoslab-agents", "Agents", ["chaoslab", "agents"])
+agents.stat("Agents running", [target("sum(chaoslab_agent_active) or vector(0)", "running")], width=6, decimals=0)
+agents.stat("Tool calls (all time)", [target("sum(chaoslab_agent_tool_calls_total) or vector(0)", "calls")], width=6,
+            decimals=0)
+agents.stat("Refused tool calls", [target("sum(chaoslab_agent_tool_calls_total{outcome=\"refused\"}) or vector(0)",
+                                          "refused")], width=6, decimals=0,
+            description="Calls outside an agent's permitted tools, or real faults a person denied.")
+agents.stat("Proposals waiting for approval", [target("chaoslab_plan_proposals{status=\"proposed\"}", "proposed")],
+            width=6, decimals=0)
+agents.state_timeline("Which agent is running", [target("chaoslab_agent_active", "{{role}}")],
+                      [{"type": "value", "options": {"0": {"text": "idle", "color": "transparent"},
+                                                      "1": {"text": "RUNNING", "color": "blue"}}}])
+agents.table("What each agent is doing now", [target("chaoslab_agent_activity_info", "activity")], width=24,
+             description="Live from the agents' process titles: round, tool and subject.")
+agents.table("Tool calls by agent and tool", [target("sum by (role, tool, outcome) (chaoslab_agent_tool_calls_total)",
+                                                     "calls")], width=12)
+agents.table("Agent runs by outcome", [target("chaoslab_agent_runs_total", "runs")], width=12)
+agents.timeseries("Tool calls added", [target("sum by (role) (increase(chaoslab_agent_tool_calls_total[5m]))",
+                                              "{{role}}")], minimum=0,
+                  description="Counted when an agent saves its transcript at the end of a run.")
+agents.timeseries("Proposals by status", [target("chaoslab_plan_proposals", "{{status}}")], minimum=0)
+agents.write("agents.json")

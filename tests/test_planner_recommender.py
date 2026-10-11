@@ -166,7 +166,7 @@ def test_recommendations_must_cite_lines_that_exist(lab_root, settings, analysed
     invented["not_recommended"] = []
     problems = recommender.validate(invented, analysed, resolve, settings)
     assert any("excerpt not found" in p for p in problems)
-    assert any("measurable" in p for p in problems)
+    assert any("each with a number" in p for p in problems)
     assert len(analysed["findings"]) == 1 or any("without a recommendation" in p for p in problems) or \
         not [f for f in analysed["findings"] if f["type"] == "weakness"][1:]
 
@@ -188,3 +188,42 @@ def test_recommender_retries_then_completes_and_saves(lab_root, settings, analys
     directory = settings.results_dir / "analysis" / analysed["analysis_id"]
     assert json.loads((directory / "recommendations.json").read_text())["status"] == "complete"
     assert "Recommender agent" in (directory / "report.md").read_text()
+
+
+def test_acceptance_numbers_must_be_measured_values(settings, analysed):
+    numbers = recommender.measured_numbers(analysed)
+    base = analysed["windows"]["baseline"]["metrics"]["tag_ingest_per_second"]["value"]
+    assert recommender.grounded(base, numbers["rate_tags"])
+    assert recommender.grounded(round(base * 0.85, 2), numbers["rate_tags"])
+    assert not recommender.grounded(1200.0, numbers["rate_tags"]), "an invented rate must not pass"
+    assert recommender.family("tags/second") == "rate_tags" and recommender.family("ms") == "ms"
+
+
+def test_rates_in_any_wording_are_checked(settings, analysed):
+    def problems(criterion):
+        weakness = next(f for f in analysed["findings"] if f["type"] == "weakness")
+        others = [f["id"] for f in analysed["findings"] if f["type"] == "weakness" and f["id"] != weakness["id"]]
+        output = {"analysis_id": analysed["analysis_id"], "missing_evidence": [],
+                  "not_recommended": [{"finding_id": f, "reason": "covered"} for f in others],
+                  "recommendations": [{"finding_id": weakness["id"], "title": "a title", "remediation": "a remediation",
+                                       "rationale": "a rationale", "locations": [], "tradeoffs": "some tradeoffs",
+                                       "effort": "small", "confidence": "low", "cause_status": "unverified",
+                                       "acceptance_criteria": [criterion], "manual_validation": "rerun it manually",
+                                       "evidence": weakness["evidence"]}]}
+        return [p for p in recommender.validate(output, analysed, lambda r: True, settings) if "measured value" in p]
+
+    assert problems("ingestion at least 850 readings/second")
+    assert problems("ingestion at least 850 readings per second")
+    base = analysed["windows"]["baseline"]["metrics"]["tag_ingest_per_second"]["value"]
+    assert not problems(f"ingestion at least {base * 0.85:.2f} tags/s (85% of baseline)")
+
+
+def test_invented_rates_are_not_rescued_by_sums(settings, analysed):
+    numbers = recommender.measured_numbers(analysed)
+    rates = sorted(numbers["rate_tags"])
+    if len(rates) >= 2:
+        made_up = rates[0] + 5 * rates[-1]
+        assert not recommender.grounded(made_up, numbers["rate_tags"]) or \
+            any(abs(made_up - f * x) <= max(0.02 * x, 0.05) for x in rates for f in recommender.SCALES)
+    assert recommender.grounded(616.1, {16.1, 200.0}, sums=True)
+    assert not recommender.grounded(616.1, {16.1, 200.0}, sums=False)
