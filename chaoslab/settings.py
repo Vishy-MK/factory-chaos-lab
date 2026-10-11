@@ -154,9 +154,26 @@ class Settings:
         return Path(found)
 
     @cached_property
+    def deployment_env_file(self) -> Path:
+        """Generated secrets of a LAN deployment (scripts/deploy-lan.sh), readable by this user only."""
+        return self.state_dir / "deployment.env"
+
+    def deployment_secret(self, name: str) -> str | None:
+        try:
+            for line in self.deployment_env_file.read_text(encoding="utf-8").splitlines():
+                key, _, value = line.partition("=")
+                if key.strip() == name:
+                    return value.strip().strip("'\"")
+        except OSError:
+            return None
+        return None
+
+    @cached_property
     def reader_credentials(self) -> tuple[str, str]:
         reader = self.lab["reader"]
-        password = os.environ.get(reader["password_env"]) or reader["password_default"]
+        # A deployment rotates the reader's password; the lab follows it even when its env was not sourced.
+        password = os.environ.get(reader["password_env"]) or self.deployment_secret(reader["password_env"]) \
+            or reader["password_default"]
         return reader["code"], password
 
     @cached_property

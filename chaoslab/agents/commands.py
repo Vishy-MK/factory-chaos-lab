@@ -73,3 +73,58 @@ def _finish(root: Path | None, run: AgentRun) -> dict:
     transcript = save_transcript(settings.state_dir / "agents", run)
     return {"role": run.role, "stopped": run.stopped, "rounds": run.rounds, "output": run.output,
             "final_text": None if run.output is not None else run.final_text, "transcript": str(transcript)}
+
+
+def plan(root: Path | None, analysis_id: str, llm: ChatClient | None = None) -> tuple[int, dict]:
+    """The Planner proposes follow-up experiments for one analysis. Nothing runs."""
+    from chaoslab import planning
+    from chaoslab.agents.restricted import PlannerToolBox
+    from chaoslab.agents.roles import PLANNER
+    from chaoslab.analysis import engine
+
+    settings = settings_module.load(root)
+    analysis = engine.read(settings, analysis_id)
+    before = {p["proposal_id"] for p in planning.list_proposals(settings)}
+    server = build_server(root)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    agent = Agent(PLANNER, llm or ChatClient(LLMConfig.from_env()), PlannerToolBox(server, PLANNER.tools),
+                  lambda *_: False, progress=stderr_progress)
+    run = asyncio.run(agent.run(f"Propose follow-up experiments for analysis {analysis['analysis_id']!r}."))
+    created = [p for p in planning.list_proposals(settings) if p["proposal_id"] not in before]
+    if run.output is not None:
+        claimed = {p.get("proposal_id") for p in run.output.get("proposals") or []}
+        real = {p["proposal_id"] for p in created}
+        # What the agent saved, from the store, not what it says it saved.
+        run.output["unverified_proposal_ids"] = sorted(claimed - real)
+        run.output["saved_proposals"] = sorted(real)
+    payload = _finish(root, run)
+    payload["proposals"] = created
+    return (EXIT_OK if run.output is not None else EXIT_FAILED), payload
+
+
+def approve(root: Path | None, proposal_id: str, via_agent: bool = True, llm: ChatClient | None = None) -> tuple[int, dict]:
+    """A person approved a proposal: hand it to the Injector (or run it directly) and record the outcome."""
+    from chaoslab import planning
+
+    settings = settings_module.load(root)
+    _, record = planning.load(settings, proposal_id)
+    if record["status"] != "proposed":
+        raise ValueError(f"proposal {proposal_id} is {record['status']}, not proposed")
+    planning.set_status(settings, record["proposal_id"], "approved")
+    definition = record["definition"]
+    if via_agent:
+        task = ("A person approved this proposed experiment. Run exactly this definition, unchanged (pass it as the "
+                "definition argument): " + json.dumps(definition, separators=(",", ":")))
+        code, payload = inject(root, definition.get("name", "proposal"), lambda *_: True, task=task, llm=llm)
+        output = payload.get("output") or {}
+        experiment_id, overall = output.get("experiment_id"), output.get("overall_result")
+    else:
+        from chaoslab.api import LabApi
+
+        result = LabApi(root).run(definition)
+        experiment_id, overall = result.get("experiment_id"), result.get("overall_result")
+        code = EXIT_OK if overall == "recovered" else EXIT_FAILED
+        payload = {"result": {k: result.get(k) for k in ("experiment_id", "overall_result", "reasons")}}
+    planning.set_status(settings, record["proposal_id"], "ran", experiment_id=experiment_id, overall_result=overall)
+    payload["proposal_id"] = record["proposal_id"]
+    return code, payload

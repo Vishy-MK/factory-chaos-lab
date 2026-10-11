@@ -86,8 +86,9 @@ unrelated services.
 - No deleting or moving database files; the write-lock fault only holds a lock and rolls back, and the latency
    fault only adds sleeps before statements. Neither changes data.
 - No restart of anything outside the four plant components.
-- No exposure to the LAN: the plant API binds `127.0.0.1`, the exporter refuses a non-loopback bind, and the lab has
-  no network-facing control API.
+- No exposure to the LAN by default: the plant API binds `127.0.0.1` and the exporter refuses a non-loopback bind.
+  `scripts/deploy-lan.sh` exposes chosen services to the LAN subnet only, through a gateway, each behind its own
+  login (see `docs/DEPLOYMENT.md`); Prometheus and the exporter are never exposed.
 - No credentials in logs: log excerpts pass through a redaction filter; the environment is never dumped.
 
 ## Read-only analysis

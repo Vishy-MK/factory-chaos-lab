@@ -161,7 +161,7 @@ class Agent:
             reply = await self.llm.chat(messages, specs)
             messages.append(reply.as_message())
             if reply.content:
-                run.transcript.append({"round": round_number, "say": reply.content})
+                run.transcript.append({"round": round_number, "at": time.time(), "say": reply.content})
             if not reply.tool_calls:
                 proctitle.agent(self.role.name, f"done after {round_number} rounds")
                 run.final_text = reply.content
@@ -195,7 +195,8 @@ class Agent:
             started = time.monotonic()
             result = await self.toolbox.call(name, arguments)
             self.progress(f"[{self.role.name}]   -> {result[:160]}  ({time.monotonic() - started:.1f}s)")
-        run.transcript.append({"round": round_number, "tool": name, "arguments": arguments, "result": result})
+        run.transcript.append({"round": round_number, "at": time.time(), "tool": name, "arguments": arguments,
+                               "result": result})
         return result
 
     def _approved(self, name: str, arguments: dict, round_number: int, subject: str) -> bool:

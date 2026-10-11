@@ -166,3 +166,57 @@ comparison.text("Baseline vs fault vs recovery",
                 "`results/<id>/result.json`. Compare two runs with `scripts/run-experiment.sh` output or "
                 "`python -m chaoslab compare <a> <b>`. Orange bands above are experiment windows.", width=6)
 comparison.write("experiment-comparison.json")
+
+DELAY = [{"type": "value", "options": {
+    "0": {"text": "off", "color": "green"}, "1": {"text": "DELAYING", "color": "orange"}}}]
+LIMITED = [{"type": "value", "options": {
+    "0": {"text": "unlimited", "color": "green"}, "1": {"text": "LIMITED", "color": "orange"}}}]
+
+resources_board = Board("chaoslab-db-resources", "Database and resources", ["chaoslab", "database", "cgroups"])
+resources_board.stat("Database delay", [target("chaoslab_db_delay_active", "{{component}}")], mappings=DELAY, width=6,
+                     description="From the lab's database hook in the plant's database clients.")
+resources_board.stat("Configured delay", [target("chaoslab_db_delay_configured_seconds", "delay")], unit="s", width=6,
+                     description="Absent when no delay is active.")
+resources_board.stat("cgroup limits", [target("chaoslab_cgroup_limited", "{{component}}")], mappings=LIMITED,
+                     width=6, description="Only components running in their lab scope (resource_limit) appear.")
+resources_board.stat("OOM kills (window)", [target("sum(increase(chaoslab_cgroup_memory_events_total"
+                                                   "{event=\"oom_kill\"}[$__range]))", "oom kills")],
+                     width=6, decimals=0)
+resources_board.timeseries("Database statements / s", [
+    target("sum by (component) (rate(chaoslab_db_statements_total[30s]))", "{{component}}")], minimum=0)
+resources_board.timeseries("Mean statement time", [
+    target("sum by (component) (rate(chaoslab_db_statement_seconds_total[30s])) / "
+           "sum by (component) (rate(chaoslab_db_statements_total[30s]))", "{{component}} total", "A"),
+    target("sum by (component) (rate(chaoslab_db_driver_seconds_total[30s])) / "
+           "sum by (component) (rate(chaoslab_db_statements_total[30s]))", "{{component}} driver", "B")],
+    unit="s", description="Total includes the injected delay; driver excludes it. The gap is the injected delay.")
+resources_board.timeseries("Statement time p95 (histogram)", [
+    target("histogram_quantile(0.95, sum by (le, component) "
+           "(rate(chaoslab_db_statement_duration_seconds_bucket[30s])))", "{{component}} p95")], unit="s",
+    description="Bucket-based estimate from the hook's histogram.")
+resources_board.timeseries("Delayed statements / s and delay added", [
+    target("sum by (component) (rate(chaoslab_db_injected_statements_total[30s]))", "{{component}} delayed /s", "A"),
+    target("sum by (component) (rate(chaoslab_db_injected_delay_seconds_total[30s]))", "{{component}} delay s/s", "B")],
+    minimum=0)
+resources_board.timeseries("Database errors / s", [
+    target("sum by (component) (rate(chaoslab_db_errors_total[30s]))", "{{component}} errors", "A"),
+    target("sum by (component) (rate(chaoslab_db_lock_errors_total[30s]))", "{{component}} locked", "B")], minimum=0)
+resources_board.timeseries("API /health latency", [target("chaoslab_api_health_latency_seconds", "{{plant}}")],
+                           unit="s", description="Downstream effect of database delay or CPU limits.")
+resources_board.timeseries("CPU used vs quota (CPUs)", [
+    target("rate(chaoslab_cgroup_cpu_usage_seconds_total[30s])", "{{component}} used", "A"),
+    target("chaoslab_cgroup_cpu_quota_cpus", "{{component}} quota", "B")], minimum=0)
+resources_board.timeseries("CPU throttled ratio", [
+    target("rate(chaoslab_cgroup_cpu_throttled_periods_total[30s]) / rate(chaoslab_cgroup_cpu_periods_total[30s])",
+           "{{component}}")], unit="percentunit", minimum=0,
+    description="Share of CFS periods in which the component was throttled.")
+resources_board.timeseries("Scope memory vs limits", [
+    target("chaoslab_cgroup_memory_current_bytes", "{{component}} current", "A"),
+    target("chaoslab_cgroup_memory_high_bytes", "{{component}} memory.high", "B"),
+    target("chaoslab_cgroup_memory_max_bytes", "{{component}} memory.max", "C")], unit="bytes", minimum=0)
+resources_board.timeseries("Memory events / s", [
+    target("rate(chaoslab_cgroup_memory_events_total[30s])", "{{component}} {{event}}")], minimum=0)
+resources_board.timeseries("Pressure stall (share of time)", [
+    target("rate(chaoslab_cgroup_pressure_stall_seconds_total[30s])", "{{component}} {{resource}}")],
+    unit="percentunit", minimum=0, description="PSI 'some': time at least one task in the scope was stalled.")
+resources_board.write("database-and-resources.json")

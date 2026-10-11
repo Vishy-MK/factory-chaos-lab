@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -30,6 +31,32 @@ class LLMError(Exception):
     pass
 
 
+LOCAL_SECRETS = "runtime/state/llm.env"
+
+
+def load_local_secrets(root: Path | None = None) -> list[str]:
+    """Load LLM settings from runtime/state/llm.env (mode 600, ignored by git) into os.environ, never overriding
+    variables already set. Returns the names loaded, never the values."""
+    from chaoslab.settings import ROOT
+
+    path = Path(root or ROOT) / LOCAL_SECRETS
+    loaded = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return loaded
+    for line in lines:
+        key, sep, value = line.partition("=")
+        key = key.strip()
+        if not sep or key.startswith("#") or not key or key in os.environ:
+            continue
+        if not (key.startswith("CHAOSLAB_LLM_") or key.endswith("_API_KEY")):
+            continue
+        os.environ[key] = value.strip().strip("'\"")
+        loaded.append(key)
+    return loaded
+
+
 @dataclass(frozen=True)
 class LLMConfig:
     provider: str
@@ -42,6 +69,8 @@ class LLMConfig:
 
     @classmethod
     def from_env(cls, environ: dict[str, str] | None = None) -> LLMConfig:
+        if environ is None:
+            load_local_secrets()
         env = os.environ if environ is None else environ
         provider = env.get("CHAOSLAB_LLM_PROVIDER", "mistral").lower()
         if provider not in PROVIDERS:

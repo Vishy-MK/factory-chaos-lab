@@ -48,7 +48,33 @@ def _metric_table(analysis: dict) -> list[str]:
     return lines
 
 
-def render(analysis: dict, narrative: dict | None) -> str:
+def _agent_recommendations(result: dict | None) -> list[str]:
+    lines = ["", "## Recommender agent (verified locations; not applied)", ""]
+    if not result or result.get("status") != "complete":
+        return lines + [f"Recommender {(result or {}).get('status', 'not requested')}: "
+                        f"{(result or {}).get('error') or 'the engine recommendations above stand'}"]
+    output = result["output"]
+    for rec in output.get("recommendations", []):
+        lines.append(f"### {rec['finding_id']}: {rec['title']} (effort {rec['effort']}, confidence {rec['confidence']}, "
+                     f"cause {rec['cause_status']})")
+        lines.append("")
+        lines.append(f"- remediation: {rec['remediation']}")
+        lines.append(f"- why: {rec['rationale']}")
+        for loc in rec.get("locations") or []:
+            lines.append(f"- verified location: `{loc['path']}:{loc['line']}` `{loc['excerpt']}`")
+        lines.append(f"- tradeoffs: {rec['tradeoffs']}")
+        lines += [f"- acceptance: {c}" for c in rec["acceptance_criteria"]]
+        lines.append(f"- manual validation: {rec['manual_validation']}")
+        lines.append(f"- evidence: {', '.join('`' + r + '`' for r in rec['evidence'])}")
+        lines.append("")
+    for item in output.get("not_recommended", []):
+        lines.append(f"- {item['finding_id']}: no fix recommended ({item['reason']})")
+    calls = [c for a in result.get("attempts", []) for c in a.get("tool_calls", [])]
+    lines.append(f"\nTool calls: {len(calls)} ({', '.join(sorted(set(calls)))}); attempts: {len(result.get('attempts', []))}")
+    return lines
+
+
+def render(analysis: dict, narrative: dict | None, recommendations: dict | None = None) -> str:
     inputs = analysis["inputs"]
     experiment = inputs["experiment"]
     fault = experiment["fault"]
@@ -144,6 +170,7 @@ def render(analysis: dict, narrative: dict | None) -> str:
     lines += ["", "## Missing evidence and limitations", ""]
     lines += [f"- missing: {m}" for m in analysis["evidence_coverage"]["missing"]] or ["- nothing listed as missing"]
     lines += [f"- {m}" for m in analysis["limitations"]]
+    lines += _agent_recommendations(recommendations)
     lines += ["", "## AI narrative (interpretation, separate from the measurements above)", ""]
     if not narrative or narrative.get("status") != "complete":
         lines.append(f"Narrative {(narrative or {}).get('status', 'not requested')}: "

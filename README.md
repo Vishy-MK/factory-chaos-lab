@@ -113,7 +113,7 @@ See `docs/DATABASE_LATENCY.md` and `docs/RESOURCE_LIMIT.md`.
 .venv/bin/python -m chaoslab mcp       # stdio; .mcp.json registers it for Claude Code in this directory
 ```
 
-The same contract as `chaoslab/api.py`, as 22 MCP tools. Only four change anything and are marked destructive:
+The same contract as `chaoslab/api.py`, as 26 MCP tools. Four change the plant and are marked destructive:
 `run_experiment`, `emergency_stop`, `plant_start`, `plant_stop`. The rest read.
 
 | Group | Tools |
@@ -180,6 +180,12 @@ Setup is the lab's own (`scripts/setup.sh`); thresholds and weights are in `conf
 uses the same LLM settings as the agents below and a read-only tool set enforced in code; without a key the
 deterministic analysis is saved and the narrative is marked incomplete.
 
+## Serving the lab to the LAN
+
+`scripts/deploy-lan.sh up` makes Grafana, the MES, the TeamSynapse RAG backend and the lab control API reachable
+from other PCs on the same network, each behind its own login, through a gateway that only admits the LAN subnet.
+See `docs/DEPLOYMENT.md` for URLs, credentials, protections and limitations.
+
 ## Watching it in htop
 
 ```bash
@@ -240,6 +246,18 @@ Prometheus listens on `127.0.0.1:9090` and scrapes the lab exporter (`:9108`, `c
 `/metrics` (`:8010`). Retention is 3 days or 512 MB. Dashboards are provisioned from files in
 `observability/grafana/dashboards` (regenerate with `observability/grafana/build_dashboards.py`). Start refuses when
 memory is low. The controller does not depend on any of this.
+
+Grafana is on `http://127.0.0.1:3000` (user `admin`, password `GRAFANA_ADMIN_PASSWORD`, default `lab-only-grafana`).
+Dashboards: **Lab overview**, **Experiment comparison**, **Manufacturing resilience** and **Database and
+resources**. The last one shows the database latency hook (`chaoslab_db_*`: delay active and configured delay,
+statements per second, mean total vs driver time per statement, a histogram p95, delayed statements, errors and
+"database is locked" errors per database client) and the cgroup counters of components in their lab scope
+(`chaoslab_cgroup_*`: limits, CPU used vs quota, throttled ratio, memory vs `memory.high`/`memory.max`, memory events
+including OOM kills, and PSI stall share). Those series exist only while there is evidence: database metrics after
+the plant was started by the lab, cgroup metrics once a component runs in its scope (after a `resource_limit` run).
+The exporter probes the plant API on its own thread, so a slow or frozen API never makes a scrape time out;
+`chaoslab_api_probe_age_seconds` shows how old the API figures are, and after 15 s without an answer the plant
+reads as down.
 
 ## Emergency stop
 

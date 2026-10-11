@@ -68,6 +68,7 @@ if [ "$WITH_GRAFANA" -eq 1 ]; then
   if ! running "$STATE/grafana.pid"; then
     GF_PATHS_DATA="$BASE/grafana-data" GF_PATHS_LOGS="$ROOT/runtime/logs" \
     GF_PATHS_PROVISIONING="$BASE/grafana-provisioning" GF_SERVER_HTTP_ADDR=127.0.0.1 GF_SERVER_HTTP_PORT=3000 \
+    GF_SERVER_DOMAIN="${GRAFANA_DOMAIN:-localhost}" GF_USERS_ALLOW_SIGN_UP=false GF_AUTH_ANONYMOUS_ENABLED=false \
     GF_ANALYTICS_REPORTING_ENABLED=false GF_ANALYTICS_CHECK_FOR_UPDATES=false \
     GF_SECURITY_ADMIN_PASSWORD="${GRAFANA_ADMIN_PASSWORD:-lab-only-grafana}" \
     launch grafana "$ROOT/runtime/logs/grafana.log" "$GRAFANA_DIR" ./bin/grafana server --homepath "$GRAFANA_DIR"

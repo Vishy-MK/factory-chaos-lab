@@ -13,11 +13,12 @@ import asyncio
 import json
 from typing import Any
 
-from chaoslab.agents.runtime import Agent, Role, ToolBox, deny_all
+from chaoslab.agents.runtime import Agent, Role, deny_all
 
-#: Tools that change the lab or the plant. Never offered to the analyst, refused if requested anyway.
-FORBIDDEN_TOOLS = frozenset({"run_experiment", "emergency_stop", "plant_start", "plant_stop",
-                             "validate_experiment", "wait_for_experiment"})
+from chaoslab.agents.restricted import FORBIDDEN_TOOLS as _BASE_FORBIDDEN, ReadOnlyToolBox  # noqa: E402
+
+#: Tools that change the lab or the plant, plus the policy probe; never offered to the analyst.
+FORBIDDEN_TOOLS = _BASE_FORBIDDEN | {"validate_experiment", "propose_experiment"}
 
 SYSTEM_PROMPT = """\
 You are the read-only Failure Impact Analyst for factory-chaos-lab.
@@ -81,27 +82,6 @@ ROLE = Role(
 assert not set(ROLE.tools) & FORBIDDEN_TOOLS, "the analyst role must not hold a mutating tool"
 
 IMPACT_KINDS = {"observation", "direct_effect", "downstream_effect", "plausible_explanation", "unverified_hypothesis"}
-
-
-class ReadOnlyToolBox(ToolBox):
-    """A ToolBox that only offers and only calls tools the server annotates read-only and that are not forbidden."""
-
-    async def _read_only(self) -> set[str]:
-        tools = await self.server.list_tools()
-        return {t.name for t in tools if getattr(t.annotations, "read_only_hint", None) is True
-                and t.name not in FORBIDDEN_TOOLS}
-
-    async def specs(self) -> list[dict]:
-        allowed = await self._read_only()
-        refused = [name for name in self.allowed if name not in allowed]
-        if refused:
-            raise PermissionError(f"refusing to offer tools that are not read-only: {refused}")
-        return await super().specs()
-
-    async def call(self, name: str, arguments: dict) -> str:
-        if name in FORBIDDEN_TOOLS or name not in self.allowed or name not in await self._read_only():
-            return f"ERROR: {name} is not a read-only analysis tool; refused"
-        return await super().call(name, arguments)
 
 
 # ------------------------------------------------------------------------------------- compact analysis views

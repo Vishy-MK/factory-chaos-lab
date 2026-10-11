@@ -30,7 +30,7 @@ def digest(path):
 
 def test_analyst_role_holds_only_read_only_tools(lab_root):
     toolbox = narrative.ReadOnlyToolBox(build_server(lab_root), narrative.ROLE.tools)
-    allowed = asyncio.run(toolbox._read_only())
+    allowed = asyncio.run(toolbox._permitted())
     assert set(narrative.ROLE.tools) <= allowed
     assert not set(narrative.ROLE.tools) & narrative.FORBIDDEN_TOOLS
     assert not allowed & {"run_experiment", "emergency_stop", "plant_start", "plant_stop"}
