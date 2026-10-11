@@ -41,6 +41,8 @@ class Collector:
         from chaoslab.observability.impact import ImpactTracker
 
         self.impact = ImpactTracker()
+        self.docker_impact = ImpactTracker()
+        self._docker: tuple[float, dict] | None = None
         self._transcripts: dict[str, tuple[float, dict]] = {}
 
     def render(self) -> str:
@@ -155,7 +157,8 @@ class Collector:
                for c, s in scoped.items() for r in ("cpu", "memory") if s.get(f"{r}_pressure")], kind="counter")
         return scoped
 
-    def _impact(self, gauge, plant: str, probed: list, table: dict, db_rows: dict, scoped: dict) -> None:
+    def _impact(self, gauge, plant: str, probed: list, table: dict, db_rows: dict, scoped: dict,
+                extra: dict | None = None) -> None:
         """Per-service status for the injection impact dashboard."""
         from chaoslab.observability import impact
 
@@ -170,15 +173,130 @@ class Collector:
         active = self.lease.active()
         status = self.impact.evaluate(probe, table, db_rows, scoped, None if rag is None else rag == 1.0, bool(active))
         names = {impact.NORMAL: "normal", impact.DEGRADED: "degraded", impact.DOWN: "down", impact.UNKNOWN: "unknown"}
+        rows = [({"plant": plant, "service": name}, float(v["status"])) for name, v in status.items()]
+        info = [({"plant": plant, "service": name, "status": names[v["status"]], "reason": v["reason"][:160]}, 1.0)
+                for name, v in status.items()]
+        # One emission per metric name for both plants: a repeated TYPE line would make Prometheus drop the scrape.
         gauge("chaoslab_service_impact", "service status: 0 normal, 1 degraded, 2 down, -1 unknown",
-              [({"plant": plant, "service": name}, float(v["status"])) for name, v in status.items()])
+              rows + (extra or {}).get("rows", []))
         gauge("chaoslab_service_impact_info", "service status with the measured reason",
-              [({"plant": plant, "service": name, "status": names[v["status"]], "reason": v["reason"][:160]}, 1.0)
-               for name, v in status.items()])
+              info + (extra or {}).get("info", []))
         targets = impact.target_service((active or {}).get("records", [])) if active else []
         gauge("chaoslab_injection_target", "the service the active injection targets",
               [({"plant": plant, "fault": fault, "service": service,
                  "experiment": (active or {}).get("name", "")}, 1.0) for fault, service in targets])
+
+    def _docker_snapshot(self) -> dict | None:
+        """The newest view of the compose stack, collected on its own thread so a scrape never waits on Docker."""
+        if getattr(self, "_docker_thread", None) is None:
+            self._docker_thread = threading.Thread(target=self._docker_loop, name="chaoslab-docker-probe", daemon=True)
+            self._docker_thread.start()
+        snapshot = self._docker
+        if snapshot is None or time.monotonic() - snapshot[0] > 60:
+            return None          # none yet, or stale: report nothing rather than old container states
+        return snapshot[1]
+
+    def _docker_loop(self) -> None:
+        while not self._api_stop.is_set():
+            started = time.monotonic()
+            try:
+                self._docker = (time.monotonic(), self._collect_docker())
+            except Exception:
+                pass
+            self._api_stop.wait(max(1.0, 5.0 - (time.monotonic() - started)))
+
+    def _collect_docker(self) -> dict | None:
+        """Read-only view of the lab's compose stack: container states, stats and its API's health."""
+        from chaoslab.chaos import containers
+
+        snapshot = None
+        try:
+            components = containers.lab_components()
+        except containers.ContainerError:
+            components = []
+        if components:
+            states, usage = {}, {}
+            for name in components:
+                try:
+                    states[name] = containers.inspect(name)
+                    usage[name] = containers.stats(name) if states[name]["running"] else None
+                except containers.ContainerError:
+                    continue
+            probe = {"plant_up": False, "api_latency_s": None, "machines_connected": None, "machines_total": None,
+                     "floor_age_s": None, "tag_id": None}
+            port = self.settings.lab.get("docker", {}).get("api_port", 8020)
+            started = time.monotonic()
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2.0) as response:
+                    body = json.loads(response.read())
+                watching = body.get("watching") or {}
+                probe.update(plant_up=body.get("status") == "ok", api_latency_s=time.monotonic() - started,
+                             machines_connected=watching.get("connected"), machines_total=watching.get("machines"))
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=2.0) as response:
+                    from chaoslab.adapters.factorysemantics import parse_prometheus
+
+                    ids = [v for n, _, v in parse_prometheus(response.read().decode()) if n == "mes_tag_values_max_id"]
+                    probe["tag_id"] = max(ids) if ids else None
+            except Exception:
+                pass
+            snapshot = {"states": states, "usage": usage, "probe": probe}
+        return snapshot
+
+    def _containers(self, gauge) -> dict:
+        """Container metrics of the lab's compose stack; returns the stack's per-service impact rows (read only)."""
+        snapshot = self._docker_snapshot()
+        if not snapshot:
+            return {}
+        plant = self.settings.lab.get("docker", {}).get("plant", "bottling-docker")
+        states, usage = snapshot["states"], snapshot["usage"]
+        codes = {"running": 1, "paused": 2, "restarting": 3, "exited": 0, "created": 0, "dead": 0}
+
+        def rows(getter):
+            out = []
+            for name, info in states.items():
+                value = getter(name, info)
+                if value is not None:
+                    out.append(({"plant": plant, "component": name}, float(value)))
+            return out
+
+        gauge("chaoslab_container_up", "1 while the lab container is running and not paused",
+              rows(lambda n, i: 1.0 if i["running"] and not i["paused"] else 0.0))
+        gauge("chaoslab_container_state_code", "container state: 0 stopped, 1 running, 2 paused, 3 restarting",
+              rows(lambda n, i: 2 if i["paused"] else codes.get(i["status"], 0)))
+        gauge("chaoslab_container_healthy", "1 when the container's health check passes (absent without one)",
+              rows(lambda n, i: None if i["health"] is None else (1.0 if i["health"] == "healthy" else 0.0)))
+        gauge("chaoslab_container_on_lab_network", "1 while the container is attached to the lab network",
+              rows(lambda n, i: 1.0 if i["on_lab_network"] else 0.0))
+        gauge("chaoslab_container_restarts", "restart count of the container", rows(lambda n, i: i["restart_count"]))
+        gauge("chaoslab_container_cpu_percent", "container CPU percent (docker stats)",
+              rows(lambda n, i: (usage.get(n) or {}).get("cpu_percent")))
+        gauge("chaoslab_container_memory_bytes", "container memory in use (docker stats)",
+              rows(lambda n, i: (usage.get(n) or {}).get("memory_bytes")))
+        gauge("chaoslab_container_memory_limit_bytes", "container memory limit (docker stats)",
+              rows(lambda n, i: (usage.get(n) or {}).get("memory_limit_bytes")))
+        table = {name: {"alive": info["running"] and not info["paused"] and info["on_lab_network"],
+                        "status": "stopped" if info["paused"] else (info["status"] if info["running"] else "exited")}
+                 for name, info in states.items()}
+        status = self.docker_impact.evaluate(snapshot["probe"], table, None, None, None, bool(self.lease.active()))
+        postgres = states.get("postgres")
+        if postgres is not None:
+            ok = postgres["running"] and not postgres["paused"] and postgres["on_lab_network"]
+            status["Database"] = {"status": 0 if ok else 2,
+                                  "reason": "postgres container running" if ok else
+                                  f"postgres container {'paused' if postgres['paused'] else postgres['status']}"
+                                  f"{'' if postgres['on_lab_network'] else ', off the lab network'}"}
+        for name, info in states.items():
+            if info["running"] and not info["on_lab_network"]:
+                from chaoslab.observability.impact import COMPONENT_SERVICE
+
+                service = COMPONENT_SERVICE.get(name)
+                if service in status:
+                    status[service] = {"status": 2, "reason": f"{name} container is off the lab network"}
+        status.pop("Shop floor", None)             # the stack has no floor simulator
+        names = {0: "normal", 1: "degraded", 2: "down", -1: "unknown"}
+        return {"rows": [({"plant": plant, "service": n}, float(v["status"])) for n, v in status.items()],
+                "info": [({"plant": plant, "service": n, "status": names[v["status"]], "reason": v["reason"][:160]},
+                          1.0) for n, v in status.items()]}
 
     def _agents(self, gauge) -> None:
         """Live agent activity from process titles, and tool calls from saved transcripts."""
@@ -369,8 +487,9 @@ class Collector:
 
         db_rows = self._database(gauge, lines, plant)
         scoped = self._cgroups(gauge, plant, table)
+        extra = self._containers(gauge)
         self._impact(gauge, plant, probed if age is not None and age <= self.api_stale_s else [], table, db_rows,
-                     scoped)
+                     scoped, extra)
         self._agents(gauge)
 
         host = resources.host_snapshot(cpu_interval=0.0)

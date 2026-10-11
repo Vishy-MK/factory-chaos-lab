@@ -550,6 +550,22 @@ def cmd_analysis(args) -> int:
             lines += [f"  narrative {payload['narrative_status']}; evidence references resolve: {payload['evidence_ok']}",
                       f"  report {payload['report']}"]
             text = "\n".join(lines)
+        elif args.analysis_command == "record":
+            import os
+
+            os.environ["CHAOSLAB_DEPLOYMENT"] = "docker"
+            from chaoslab.analysis import recorder
+
+            settings = settings_module.load(Path(args.root) if args.root else None)
+            print(f"recording the Docker stack read-only for {args.seconds:.0f} s; perform the fault now", flush=True)
+            path = recorder.record(settings, args.seconds, args.label)
+            data = json.loads(path.read_text(encoding="utf-8"))
+            found = data["detection"]
+            payload = {"artifact": str(path), "detection": found, "fault": data["fault"]}
+            text = (f"recording {path}\n  samples {len(data['samples'])}; " +
+                    (f"detected {found['kinds']} on {found['components']} for {found['end'] - found['start']:.1f} s"
+                     if found["detected"] else f"no fault detected ({found.get('reason')})") +
+                    f"\n  analyse it: python -m chaoslab analysis analyze {path}")
         elif args.analysis_command == "recommend":
             result = service.recommend(settings, args.analysis_id)
             payload = result
@@ -680,6 +696,11 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_cmd.add_argument("--fault-meta", help="JSON with fault type/target/parameters/timing when not recorded")
     analyze_cmd.add_argument("--no-narrative", action="store_true", help="deterministic analysis only, no LLM")
     analyze_cmd.set_defaults(func=cmd_analysis)
+    rec_cmd = analysis_sub.add_parser("record", help="record the Docker stack read-only while an external tool "
+                                                      "injects a fault; detects the fault window")
+    rec_cmd.add_argument("--seconds", type=float, default=120, help="recording length (10..600)")
+    rec_cmd.add_argument("--label", default="external")
+    rec_cmd.set_defaults(func=cmd_analysis)
     rec = analysis_sub.add_parser("recommend", help="the read-only Recommender agent: fixes with verified locations")
     rec.add_argument("analysis_id")
     rec.set_defaults(func=cmd_analysis)

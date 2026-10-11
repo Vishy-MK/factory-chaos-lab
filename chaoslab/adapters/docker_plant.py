@@ -23,6 +23,8 @@ class ContainerHandle:
 
 class DockerPlantAdapter(FactorySemanticsAdapter):
     deployment = "docker"
+    #: docker stats takes about a second per call; a fast sampler turns it off.
+    collect_stats = True
 
     def find_components(self) -> dict[str, ContainerHandle]:
         found = {}
@@ -47,7 +49,7 @@ class DockerPlantAdapter(FactorySemanticsAdapter):
             row.update(pid=info["pid"], alive=info["running"] and not info["paused"],
                        status="stopped" if info["paused"] else (info["status"] or "unknown"),
                        container=info["name"], health=info["health"], restarts=info["restart_count"])
-            if info["running"]:
+            if info["running"] and self.collect_stats:
                 try:
                     usage = containers.stats(name) or {}
                 except containers.ContainerError:

@@ -41,8 +41,43 @@ plant adapter (`chaoslab/adapters/docker_plant.py`): the same HTTP probes agains
 and memory from the containers, and a PostgreSQL readiness check as the integrity check. Recovery does not
 require floor progress there, because the stack has no floor simulator.
 
+## External container faults: observe and analyse
+
+The lab does not inject container faults itself. Another tool does (plain `docker` commands, Pumba, Chaos
+Toolkit's Docker driver...), and the lab observes and analyses the result, read-only.
+
+```bash
+# 1. record the stack while the fault happens (10..600 s; detects the fault window itself)
+CHAOSLAB_DEPLOYMENT=docker python -m chaoslab analysis record --seconds 120 --label api-stop
+#    meanwhile, in another terminal, the external fault, for example:
+docker stop chaoslab-api-1; sleep 10; docker start chaoslab-api-1
+docker pause chaoslab-opc-sim-1; sleep 10; docker unpause chaoslab-opc-sim-1
+docker network disconnect chaoslab_lab chaoslab-opc-agent-1; sleep 10
+docker network connect --alias opc-agent chaoslab_lab chaoslab-opc-agent-1
+
+# 2. analyse the recording: impact, ranked weaknesses, Recommender fixes, resilience score
+python -m chaoslab analysis analyze results/analysis/recordings/<recording>.json
+```
+
+The recorder samples once a second (slower while the API is down) with the lab's own probes plus each container's
+state, network attachment, restart count and CPU/memory limits. It detects the fault window from what it observed
+(stopped, paused, off the lab network, restarted, limits changed), so attribution is
+`confirmed_by_measurement`. When it sees no change, attribution stays `uncertain`; supply the timing with
+`analysis analyze --fault-meta` if another system recorded it. External faults have no lab cleanup or removal
+record, so the cleanup dimension of the score is unmeasured and the overall score is `insufficient_evidence` unless
+that evidence exists.
+
+## Observation in Grafana
+
+When the stack is running, the exporter adds `chaoslab_container_*` (state, health, lab network attachment,
+restarts, CPU, memory) and per-service impact for the `bottling-docker` plant. The **Injection impact** dashboard
+shows both plants (`plant / service`) and a Docker stack section with container state, network attachment,
+restarts, CPU and memory. The exporter collects the Docker view on its own thread, so a slow Docker call never
+delays a scrape. The exporter must run with Docker access: after the group change, log in again or start
+monitoring from a shell that has it (`newgrp docker`).
+
 ## Status
 
-Implemented: the stack, the deployment switch, the adapter and the allowlisted container module. Not implemented
-yet: container fault types, the emergency-stop sweep for containers, container metrics in the exporter, and agent
-runs against the stack.
+Implemented: the stack, the deployment switch, the adapter, container observation in the exporter and Grafana,
+read-only recording of external container faults, and their analysis. The lab does not inject container faults
+itself.

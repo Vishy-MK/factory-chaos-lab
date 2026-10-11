@@ -202,6 +202,13 @@ Setup is the lab's own (`scripts/setup.sh`); thresholds and weights are in `conf
 uses the same LLM settings as the agents below and a read-only tool set enforced in code; without a key the
 deterministic analysis is saved and the narrative is marked incomplete.
 
+## Docker stack (opt-in)
+
+`scripts/docker-up.sh` runs a lighter MES stack in containers (PostgreSQL, API, OPC sim, OPC agent) beside the
+lightweight plant; `CHAOSLAB_DEPLOYMENT=docker` points the lab at it. Faults on it are performed by an external tool;
+`chaoslab analysis record` observes them read-only and `analysis analyze` explains their impact. See
+`docs/DOCKER.md`.
+
 ## Serving the lab to the LAN
 
 `scripts/deploy-lan.sh up` makes Grafana, the MES, the TeamSynapse RAG backend and the lab control API reachable

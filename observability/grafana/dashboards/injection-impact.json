@@ -253,7 +253,7 @@
             "uid": "prometheus"
           },
           "expr": "chaoslab_service_impact",
-          "legendFormat": "{{service}}",
+          "legendFormat": "{{plant}} / {{service}}",
           "refId": "A"
         }
       ],
@@ -491,6 +491,272 @@
       "gridPos": {
         "x": 16,
         "y": 18,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      }
+    },
+    {
+      "type": "state-timeline",
+      "title": "Docker stack: container state",
+      "description": "The lab's compose stack (scripts/docker-up.sh); absent when it is down.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "chaoslab_container_state_code",
+          "legendFormat": "{{component}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "STOPPED",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "running",
+                  "color": "green"
+                },
+                "2": {
+                  "text": "PAUSED",
+                  "color": "orange"
+                },
+                "3": {
+                  "text": "restarting",
+                  "color": "yellow"
+                }
+              }
+            }
+          ],
+          "custom": {
+            "fillOpacity": 70
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showValue": "auto",
+        "mergeValues": true,
+        "legend": {
+          "displayMode": "list"
+        }
+      },
+      "id": 10,
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      }
+    },
+    {
+      "type": "state-timeline",
+      "title": "Docker stack: lab network attachment",
+      "description": "",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "chaoslab_container_on_lab_network",
+          "legendFormat": "{{component}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "OFF NETWORK",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "attached",
+                  "color": "green"
+                }
+              }
+            }
+          ],
+          "custom": {
+            "fillOpacity": 70
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showValue": "auto",
+        "mergeValues": true,
+        "legend": {
+          "displayMode": "list"
+        }
+      },
+      "id": 11,
+      "gridPos": {
+        "x": 0,
+        "y": 33,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Docker stack: container restarts",
+      "description": "",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "chaoslab_container_restarts",
+          "legendFormat": "{{component}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 12,
+      "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Docker stack: container CPU",
+      "description": "",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "chaoslab_container_cpu_percent",
+          "legendFormat": "{{component}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 13,
+      "gridPos": {
+        "x": 8,
+        "y": 40,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Docker stack: container memory",
+      "description": "",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "chaoslab_container_memory_bytes",
+          "legendFormat": "{{component}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 14,
+      "gridPos": {
+        "x": 16,
+        "y": 40,
         "w": 8,
         "h": 8
       },

@@ -235,7 +235,7 @@ impact.stat("Services down", [target("count(chaoslab_service_impact == 2) or vec
             decimals=0)
 impact.stat("Experiment", [target("chaoslab_experiment_active", "state")], mappings=ACTIVE, width=8)
 impact.state_timeline("Service status (each against its own baseline)",
-                      [target("chaoslab_service_impact", "{{service}}")], IMPACT,
+                      [target("chaoslab_service_impact", "{{plant}} / {{service}}")], IMPACT,
                       description="normal / DEGRADED / DOWN per service, judged by the exporter from its own probes "
                                   "against each service's rolling baseline; unknown when not measured.")
 impact.table("Now: status and measured reason", [target("chaoslab_service_impact_info", "info")], width=24,
@@ -247,6 +247,21 @@ impact.timeseries("Tag ingestion", [target("rate(chaoslab_plant_tag_values_max_i
 impact.timeseries("Database statement time", [
     target("sum(rate(chaoslab_db_statement_seconds_total[30s])) / sum(rate(chaoslab_db_statements_total[30s]))",
            "mean")], unit="s", width=8)
+CONTAINER = [{"type": "value", "options": {
+    "0": {"text": "STOPPED", "color": "red"}, "1": {"text": "running", "color": "green"},
+    "2": {"text": "PAUSED", "color": "orange"}, "3": {"text": "restarting", "color": "yellow"}}}]
+NETWORK = [{"type": "value", "options": {"0": {"text": "OFF NETWORK", "color": "red"},
+                                          "1": {"text": "attached", "color": "green"}}}]
+impact.state_timeline("Docker stack: container state", [target("chaoslab_container_state_code", "{{component}}")],
+                      CONTAINER, description="The lab's compose stack (scripts/docker-up.sh); absent when it is down.")
+impact.state_timeline("Docker stack: lab network attachment",
+                      [target("chaoslab_container_on_lab_network", "{{component}}")], NETWORK)
+impact.timeseries("Docker stack: container restarts", [target("chaoslab_container_restarts", "{{component}}")],
+                  width=8, minimum=0)
+impact.timeseries("Docker stack: container CPU", [target("chaoslab_container_cpu_percent", "{{component}}")],
+                  unit="percent", width=8, minimum=0)
+impact.timeseries("Docker stack: container memory", [target("chaoslab_container_memory_bytes", "{{component}}")],
+                  unit="bytes", width=8, minimum=0)
 impact.write("injection-impact.json")
 
 agents = Board("chaoslab-agents", "Agents", ["chaoslab", "agents"])

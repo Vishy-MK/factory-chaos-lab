@@ -24,7 +24,8 @@ from chaoslab.store import ResultStore
 ARTIFACT_FORMAT = "chaoslab-measurements/v1"
 SAMPLE_FIELDS = ("t", "label", "api_up", "api_latency_ms", "api_error", "auth_ok", "machines_total",
                  "machines_connected", "tag_id", "floor_age_s", "telemetry_age_s", "target_reachable",
-                 "production", "database", "cgroups", "host_cpu_percent", "host_available_mb", "components")
+                 "production", "database", "cgroups", "host_cpu_percent", "host_available_mb", "components",
+                 "container_states")
 
 
 class EvidenceError(Exception):
@@ -369,6 +370,9 @@ def load_artifact(settings: Settings, path: Path) -> Evidence:
     windows = {name: {"start": _epoch((data.get("windows") or {}).get(name, {}).get("start")),
                       "end": _epoch((data.get("windows") or {}).get(name, {}).get("end")),
                       "basis": "artifact windows"} for name in ("baseline", "fault", "recovery", "post")}
+    activation = (data.get("fault") or {}).get("activation")
+    if activation and activation.get("status") in ("confirmed_by_measurement", "recorded_by_controller", "uncertain"):
+        fault["activation"] = activation
     if windows["fault"]["start"] is None and active_from is not None and active_until is not None:
         windows["fault"] = {"start": active_from, "end": active_until, "basis": "artifact fault.timing"}
     if windows["recovery"]["start"] is None and windows["fault"]["end"] is not None:
