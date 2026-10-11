@@ -11,6 +11,7 @@ from typing import Any
 from chaoslab import __version__ as lab_version
 from chaoslab import model, proctitle, resources, settings as settings_module
 from chaoslab.adapters.factorysemantics import FactorySemanticsAdapter
+from chaoslab.adapters.docker_plant import make_adapter
 from chaoslab.adapters.logs import LogCollector
 from chaoslab.adapters.metrics import HostSampler, MetricsAdapter, Sampler
 from chaoslab.adapters.scoring import ScoringAdapter
@@ -51,7 +52,7 @@ class Controller:
         self.audit = AuditLog(self.settings.audit_file)
         self.lease = Lease(self.settings.lease_file, self.settings.stop_flag)
         self.store = ResultStore(self.settings.results_dir)
-        self.plant = FactorySemanticsAdapter(self.settings)
+        self.plant = make_adapter(self.settings)
         self.metrics = MetricsAdapter(self.plant)
         self.scoring = ScoringAdapter(self.settings)
         self.logs = LogCollector(self.settings)

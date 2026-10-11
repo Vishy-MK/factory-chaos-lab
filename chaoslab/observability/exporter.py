@@ -10,6 +10,7 @@ from pathlib import Path
 
 from chaoslab import resources, settings as settings_module
 from chaoslab.adapters.factorysemantics import FactorySemanticsAdapter
+from chaoslab.adapters.docker_plant import make_adapter
 from chaoslab.audit import Lease
 from chaoslab.store import ResultStore
 
@@ -23,7 +24,7 @@ def _escape(value: str) -> str:
 class Collector:
     def __init__(self, settings: settings_module.Settings):
         self.settings = settings
-        self.plant = FactorySemanticsAdapter(settings)
+        self.plant = make_adapter(settings)
         self.lease = Lease(settings.lease_file, settings.stop_flag)
         self.store = ResultStore(settings.results_dir)
         self._lock = threading.Lock()

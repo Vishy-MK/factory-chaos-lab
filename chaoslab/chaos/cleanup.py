@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from chaoslab.adapters.factorysemantics import FactorySemanticsAdapter
+from chaoslab.adapters.docker_plant import make_adapter
 from chaoslab.audit import AuditLog
 from chaoslab.chaos.faults import FAULTS, Check, FaultContext
 from chaoslab.settings import Settings
 
 
 def build_context(settings: Settings) -> FaultContext:
-    return FaultContext(settings=settings, plant=FactorySemanticsAdapter(settings))
+    return FaultContext(settings=settings, plant=make_adapter(settings))
 
 
 def cleanup_records(settings: Settings, records: list[dict], audit: AuditLog | None, experiment_id: str | None,

@@ -1,0 +1,121 @@
+# Lighter FactorySemantics MES stack for container experiments: PostgreSQL, a one-shot migration, the API, the OPC UA
+# simulator and the OPC agent. Built from the upstream Dockerfile (factorysemantics-mes/docker/Dockerfile), unchanged.
+#
+#   scripts/docker-up.sh      scripts/docker-status.sh      scripts/docker-down.sh
+#
+# Isolation: its own project and network; only the API is published, on 127.0.0.1:8020, so it never clashes with the
+# lightweight plant on 8010. Every container the lab may act on carries chaoslab.target=<component>; the lab finds
+# containers by that label and the compose project, never by a name a caller supplies.
+
+name: chaoslab
+
+x-mes: &mes
+  image: chaoslab/factorysemantics-mes:lab
+  build:
+    context: ../factorysemantics-mes
+    dockerfile: docker/Dockerfile
+  env_file: ../runtime/state/docker.env
+  environment: &mes-env
+    MES_DATABASE_URL: postgresql+psycopg://mes:${POSTGRES_PASSWORD:-mes}@postgres:5432/mes_twin
+    MES_PLANT_NAME: bottling-docker
+    MES_PLANT_TIMEZONE: UTC
+    MES_OPC_ENDPOINT: opc.tcp://opc-sim:4840/mes-twin/sim
+    MES_LOG_LEVEL: INFO
+    MES_SIM_SPEED: "1"
+  networks: [lab]
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mes
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mes}
+      POSTGRES_DB: mes_twin
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mes -d mes_twin"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks: [lab]
+    restart: unless-stopped
+    labels:
+      chaoslab.target: postgres
+      chaoslab.cpus: "0.5"
+      chaoslab.memory_mb: "256"
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 256M}
+
+  # Runs once and exits: schema, demo plant, and the lab's read-only ANALYST account.
+  migrate:
+    <<: *mes
+    restart: "no"
+    command: >-
+      sh -c "fsmes init-db && fsmes seed &&
+             (fsmes add-user ANALYST 'Plant Analyst' \"$$FSMES_ANALYST_PASSWORD\" --role analyst ||
+              fsmes set-password ANALYST \"$$FSMES_ANALYST_PASSWORD\")"
+    depends_on:
+      postgres: {condition: service_healthy}
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 384M}
+
+  api:
+    <<: *mes
+    command: fsmes run-api --host 0.0.0.0
+    ports:
+      - "127.0.0.1:8020:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request as u; u.urlopen('http://localhost:8000/health', timeout=3)\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    depends_on:
+      postgres: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    labels:
+      chaoslab.target: api
+      chaoslab.cpus: "1.0"
+      chaoslab.memory_mb: "384"
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 384M}
+
+  opc-sim:
+    <<: *mes
+    environment:
+      <<: *mes-env
+      MES_OPC_ENDPOINT: opc.tcp://0.0.0.0:4840/mes-twin/sim
+    command: fsmes run-opc-sim
+    labels:
+      chaoslab.target: opc-sim
+      chaoslab.cpus: "0.5"
+      chaoslab.memory_mb: "384"
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 384M}
+
+  opc-agent:
+    <<: *mes
+    command: fsmes run-opc-agent
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      opc-sim: {condition: service_started}
+    labels:
+      chaoslab.target: opc-agent
+      chaoslab.cpus: "0.5"
+      chaoslab.memory_mb: "256"
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 256M}
+
+networks:
+  lab:
+    name: chaoslab_lab
+
+volumes:
+  pgdata:
+    name: chaoslab_pgdata

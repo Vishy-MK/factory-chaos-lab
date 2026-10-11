@@ -48,7 +48,9 @@ file.
    controllers are taken over).
 4. **Intent record before injection**: the lease lists what is about to be done before it is done, so cleanup is
    possible even if the controller dies between the two.
-5. **Independent watchdog**: a separate process (own session) started per experiment. It cleans up the lease's
+5. **Independent watchdog**: a separate process started per experiment as its own transient user-systemd service
+   (`chaoslab-watchdog-<id>.service`), so killing the controller, its terminal or its session cannot take the
+   watchdog with it (falls back to a detached process in its own session without a user manager). It cleans up the lease's
    records if the controller process disappears or the deadline passes, then exits. It is bound to the experiment id
    so it cannot act on a later experiment.
 6. **Self-limiting helpers**: the CPU burner and the SQLite lock holder end themselves at their deadline and clamp

@@ -106,7 +106,20 @@ class Settings:
         return self.state_dir / "emergency-stop"
 
     @cached_property
+    def deployment(self) -> str:
+        """`lightweight` (default: fsmes plant on SQLite) or `docker` (the lab compose stack), from
+        CHAOSLAB_DEPLOYMENT. Everything else follows from it; unset, nothing changes."""
+        value = (os.environ.get("CHAOSLAB_DEPLOYMENT") or "lightweight").strip().lower()
+        if value not in ("lightweight", "docker"):
+            raise ConfigError(f"CHAOSLAB_DEPLOYMENT must be lightweight or docker, not {value!r}")
+        if value == "docker" and "docker" not in self.lab:
+            raise ConfigError("config/lab.yaml has no docker section")
+        return value
+
+    @cached_property
     def plant_name(self) -> str:
+        if self.deployment == "docker":
+            return self.lab["docker"]["plant"]
         return self.lab["plant"]["name"]
 
     @cached_property
@@ -123,10 +136,14 @@ class Settings:
 
     @cached_property
     def api_host(self) -> str:
+        if self.deployment == "docker":
+            return "127.0.0.1"
         return self.pack_settings.get("serve", {}).get("api_host", "127.0.0.1")
 
     @cached_property
     def api_port(self) -> int:
+        if self.deployment == "docker":
+            return int(self.lab["docker"]["api_port"])
         return int(self.pack_settings["serve"]["api_port"])
 
     @cached_property

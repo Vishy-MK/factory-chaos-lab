@@ -135,11 +135,11 @@ def observe(settings: Settings, seconds: float, interval_s: float | None = None)
     The probes are the controller's samplers: health, an authenticated read of the work-order summary, equipment
     states, /metrics, /proc and the database hook's counters. Nothing is written to the plant.
     """
-    from chaoslab.adapters.factorysemantics import FactorySemanticsAdapter
+    from chaoslab.adapters.docker_plant import make_adapter
     from chaoslab.adapters.metrics import MetricsAdapter, Sampler
 
     seconds = max(5.0, min(float(seconds), MAX_OBSERVE_S))
-    plant = FactorySemanticsAdapter(settings)
+    plant = make_adapter(settings)
     health = plant.health(timeout=2.0)
     if not health.ok:
         raise evidence_module.EvidenceError("the plant API is not answering; nothing to observe")

@@ -95,8 +95,10 @@ def cmd_status(args) -> int:
         if status["machines"]:
             m = status["machines"]
             _say(f"machines: {m.get('connected')}/{m.get('machines')} connected")
-        if status["floor"]:
+        if status["floor"] and status["floor"].get("seconds_since") is not None:
             _say(f"floor last recorded a check {status['floor'].get('seconds_since')}s ago")
+        elif status["floor"]:
+            _say("floor: no floor simulator in this deployment")
         for name, row in status["components"].items():
             _say(f"  {name:<10} {row['status']:<9} pid={row['pid']} rss={row['rss_mb']} MB")
         _say(f"plant RSS total {status['plant_rss_mb_total']} MB; host available "

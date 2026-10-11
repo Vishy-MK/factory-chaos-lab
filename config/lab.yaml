@@ -38,3 +38,11 @@ exporter:
 
 results:
   dir: results
+
+# Opt-in container deployment (CHAOSLAB_DEPLOYMENT=docker): the lighter MES stack in docker/compose.lab.yml.
+docker:
+  plant: bottling-docker
+  project: chaoslab
+  compose_file: docker/compose.lab.yml
+  api_port: 8020
+  start_timeout_s: 180
