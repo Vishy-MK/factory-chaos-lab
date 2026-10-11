@@ -1,0 +1,87 @@
+# Failure impact analysis: thresholds, severity rubric and resilience score weights.
+# Read by chaoslab/analysis. Changing a value changes the analysis, never the experiments.
+
+measurement:
+  # Fewer samples than this in a window qualifies every comparison made from it.
+  min_samples_per_window: 5
+  # Percentiles: nearest-rank on the sorted samples of one window. Never averaged across windows.
+  percentile_method: nearest_rank
+  # Consecutive healthy samples that count as recovered (the controller also uses 3).
+  stable_samples: 3
+  # Tag ingestion must advance over this window (seconds) to count as progressing.
+  ingest_window_s: 3.0
+  # Floor freshness limit (seconds since the floor last recorded a check); the controller uses 45.
+  floor_age_limit_s: 45.0
+  # Telemetry older than this (seconds) is stale, for sources that report telemetry age.
+  telemetry_stale_s: 12.0
+
+baseline:
+  # A baseline below these is reported as unhealthy and comparisons against it are qualified.
+  min_api_success_ratio: 0.99
+  min_authenticated_success_ratio: 0.99
+  require_all_machines_connected: true
+  max_ingest_stall_s: 10.0
+  min_ingest_per_second: 0.1
+  max_floor_age_s: 45.0
+  min_duration_s: 10.0
+
+severity:
+  # Points per criterion; the level comes from the total. See docs/FAILURE_ANALYSIS.md.
+  levels:            # minimum points for each level, checked from the top
+    critical: 9
+    high: 6
+    medium: 3
+    low: 1
+  latency_ratio_points:      # p95 during / baseline p95 -> points
+    - [20.0, 3]
+    - [5.0, 2]
+    - [1.5, 1]
+  availability_drop_points:  # percentage points lost in API or authenticated success ratio
+    - [20.0, 4]
+    - [5.0, 3]
+    - [0.5, 2]
+  throughput_drop_points:    # percent drop of tag ingestion or database statement rate
+    - [80.0, 3]
+    - [40.0, 2]
+    - [15.0, 1]
+  stall_points:              # longest ingestion stall (seconds)
+    - [30.0, 3]
+    - [10.0, 2]
+    - [2.0, 1]
+  observation_loss_points: 2   # machines disconnected, telemetry stale or counters reset
+  duration_points:             # seconds the degradation lasted inside the fault window
+    - [30.0, 2]
+    - [5.0, 1]
+  core_service_points: 1       # the MES API itself, or authenticated operations, stopped working
+  persists_after_fault_points: 2
+  recovery_failed_points: 9
+  slow_recovery_s: 30.0
+  slow_recovery_points: 2
+  scope_points_per_extra_area: 1   # each additional affected area beyond the first
+
+score:
+  # Each dimension scores 0..100 from documented thresholds; the overall is the weighted mean of the
+  # dimensions, available only when every required dimension was measured. Missing dimensions are never
+  # filled in and their weight is never redistributed.
+  required: [availability, latency, throughput, recovery, integrity, cleanup]
+  weights:
+    availability: 0.25
+    latency: 0.15
+    throughput: 0.20
+    recovery: 0.20
+    integrity: 0.10
+    cleanup: 0.10
+  availability:       # min(API, authenticated) success ratio during the fault: full at >= full, zero at <= zero
+    full: 0.999
+    zero: 0.5
+  latency:            # p95 during / baseline p95: full at <= full, zero at >= zero, log-linear between
+    full: 1.5
+    zero: 50.0
+  throughput:         # ingestion rate during / baseline, linear; minus stall penalty
+    full: 0.9
+    zero: 0.2
+    stall_penalty_per_s: 1.0
+    stall_penalty_max: 30
+  recovery:           # seconds to the first stable healthy run after the fault ended
+    full_s: 5.0
+    zero_s: 90.0

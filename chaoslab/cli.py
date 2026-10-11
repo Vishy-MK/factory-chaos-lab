@@ -454,6 +454,44 @@ def cmd_agent(args) -> int:
     _emit(payload, True)
     return code
 
+def cmd_analysis(args) -> int:
+    from chaoslab import settings as settings_module
+    from chaoslab.analysis import engine as analysis_engine, service
+    from chaoslab.analysis.evidence import EvidenceError
+
+    settings = settings_module.load(Path(args.root) if args.root else None)
+    try:
+        if args.analysis_command == "baseline":
+            payload = service.assess_baseline(settings, args.source, args.observe)
+            text = (f"baseline {payload['baseline_id']}: {payload['readiness']} ({payload['samples']} samples from "
+                    f"{payload['source']})\n  failed checks: {payload['failed_checks'] or 'none'}; not measured: "
+                    f"{payload['unmeasured_checks'] or 'none'}\n  saved {payload['path']}")
+        elif args.analysis_command == "analyze":
+            payload = service.analyse_failure(settings, args.experiment, args.baseline, args.fault_meta,
+                                              with_narrative=not args.no_narrative)
+            score = payload["score"]
+            lines = [f"analysis {payload['analysis_id']}",
+                     f"  baseline readiness {payload['baseline_readiness']}; attribution {payload['attribution']}; "
+                     f"recovery {payload['recovery']}",
+                     f"  score {score['status']}" + (f" {score['score']}" if score.get("score") is not None
+                                                     else f" (missing {score.get('missing_dimensions')})")]
+            lines += [f"  {f['id']} {f['severity']:<8} confidence {f['confidence']:<6} {f['symptom']}"
+                      for f in payload["findings"]]
+            lines += [f"  narrative {payload['narrative_status']}; evidence references resolve: {payload['evidence_ok']}",
+                      f"  report {payload['report']}"]
+            text = "\n".join(lines)
+        else:
+            stored = analysis_engine.read(settings, args.analysis_id)
+            directory = Path(settings.results_dir) / "analysis" / stored["analysis_id"]
+            payload = stored
+            text = (directory / "report.md").read_text(encoding="utf-8")
+    except (EvidenceError, FileNotFoundError, ValueError) as exc:
+        _warn(str(exc))
+        return EXIT_FAILED
+    _emit(payload, args.json, text)
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="chaoslab", description="FactorySemantics chaos laboratory controller")
     parser.add_argument("--root", help="lab root directory (default: the checkout containing this package)")
@@ -525,6 +563,24 @@ def build_parser() -> argparse.ArgumentParser:
     analyze = agent_sub.add_parser("analyze", help="the Recovery Analyst judges one finished experiment")
     analyze.add_argument("experiment_id")
     analyze.set_defaults(func=cmd_agent)
+    analysis = sub.add_parser("analysis", help="read-only failure impact analysis of a finished failure")
+    analysis_sub = analysis.add_subparsers(dest="analysis_command", required=True)
+    base = analysis_sub.add_parser("baseline", help="assess a baseline and save the assessment")
+    base.add_argument("source", nargs="?", help="run id, chaos-opcua report path or measurement artifact path")
+    base.add_argument("--observe", type=float, metavar="SECONDS",
+                      help="instead, observe the running plant read-only for up to 120 s")
+    base.set_defaults(func=cmd_analysis)
+    analyze_cmd = analysis_sub.add_parser("analyze", help="analyse an externally performed failure")
+    analyze_cmd.add_argument("experiment", help="run id, chaos-opcua report path or measurement artifact path")
+    analyze_cmd.add_argument("--baseline", default="own",
+                             help="'own' (the run's own pre-fault window, default), a baseline assessment id, or a "
+                                  "run id / path")
+    analyze_cmd.add_argument("--fault-meta", help="JSON with fault type/target/parameters/timing when not recorded")
+    analyze_cmd.add_argument("--no-narrative", action="store_true", help="deterministic analysis only, no LLM")
+    analyze_cmd.set_defaults(func=cmd_analysis)
+    show_analysis = analysis_sub.add_parser("show", help="print a stored analysis report")
+    show_analysis.add_argument("analysis_id", nargs="?", default="latest")
+    show_analysis.set_defaults(func=cmd_analysis)
     workload = sub.add_parser("workload", help="run a bounded workload against the lab plant")
     workload.add_argument("--profile", default="baseline")
     workload.add_argument("--seconds", type=int, default=30)

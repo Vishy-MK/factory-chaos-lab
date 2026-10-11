@@ -51,6 +51,8 @@ chaoslab/
   api.py             the contract for a future caller (see below)
   cli.py             `python -m chaoslab ...`
   report.py          parameters, outcome and per-phase metrics table of one result (`chaoslab report`)
+  analysis/          read-only failure impact analysis: evidence, baseline, comparisons, findings, fixes, score,
+                     read-only narrative agent (docs/FAILURE_ANALYSIS.md); writes only results/analysis/
 ```
 
 Control flow of an infrastructure experiment:

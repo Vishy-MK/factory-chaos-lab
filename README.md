@@ -113,7 +113,7 @@ See `docs/DATABASE_LATENCY.md` and `docs/RESOURCE_LIMIT.md`.
 .venv/bin/python -m chaoslab mcp       # stdio; .mcp.json registers it for Claude Code in this directory
 ```
 
-The same contract as `chaoslab/api.py`, as 21 MCP tools. Only four change anything and are marked destructive:
+The same contract as `chaoslab/api.py`, as 22 MCP tools. Only four change anything and are marked destructive:
 `run_experiment`, `emergency_stop`, `plant_start`, `plant_stop`. The rest read.
 
 | Group | Tools |
@@ -157,6 +157,28 @@ terminal the answer is no); the safety policy still decides what runs. Transcrip
 | `MISTRAL_API_KEY` / `GROQ_API_KEY` | none | key for the chosen provider |
 | `CHAOSLAB_LLM_MODEL` | `ministral-14b-latest` for Mistral (the free tier allows no larger model); required for Groq | model name |
 | `CHAOSLAB_LLM_BASE_URL` | the provider's | another OpenAI-compatible endpoint |
+
+## Failure impact analysis (read only)
+
+Analyses a failure that something else performed (this lab's controller, the external chaos-opcua tool, or any
+system that writes a `chaoslab-measurements/v1` artifact). It assesses the baseline, compares the same metrics
+before, during and after, assesses impact and recovery, ranks weaknesses by severity with a separate confidence,
+recommends fixes with verified source locations, and computes an explainable resilience score, or
+`insufficient_evidence` when the measurements do not support one. It never injects, cleans up or changes anything;
+see `docs/FAILURE_ANALYSIS.md` for inputs, metric definitions, the severity rubric, the score and the read-only
+boundary.
+
+```bash
+python -m chaoslab analysis baseline <baseline-observe-run-id>          # or --observe 30 against the running plant
+python -m chaoslab analysis analyze <run-id> --baseline <baseline-id>   # or the run's own baseline (default)
+python -m chaoslab analysis analyze injections/chaos-opcua/results/<report>.json
+python -m chaoslab analysis analyze <run-id> --no-narrative             # without an LLM key
+python -m chaoslab analysis show latest                                 # results/analysis/<id>/report.md
+```
+
+Setup is the lab's own (`scripts/setup.sh`); thresholds and weights are in `config/analysis.yaml`. The AI narrative
+uses the same LLM settings as the agents below and a read-only tool set enforced in code; without a key the
+deterministic analysis is saved and the narrative is marked incomplete.
 
 ## Watching it in htop
 
@@ -265,4 +287,5 @@ Stop the plant, delete `runtime/`, run `scripts/setup.sh`. `results/` and `facto
   availability figures are `null` in short runs. That is reported, not filled in.
 - The lab's own CPU/RSS figures depend on a recorded line replayed from memory: restarting the OPC server restarts
   the replay from the start of the recording.
+- The failure impact analysis's AI narrative is verified only with scripted model responses in this environment.
 - Not implemented: HTTP interface for the AI contract (MCP over stdio exists), Loki, alerting, PostgreSQL deployment, multi-plant faults.

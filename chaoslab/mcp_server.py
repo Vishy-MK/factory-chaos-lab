@@ -196,6 +196,19 @@ def build_server(root: Path | None = None) -> MCPServer:
         return _plain(api.scoring(experiment_id))
 
     @tool(READ)
+    def get_analysis(analysis_id: str, section: str = "summary") -> dict[str, Any]:
+        """A stored failure impact analysis (results/analysis/). section: summary, baseline, comparisons,
+        recovery, findings, recommendations, score, coverage or refs. Read only."""
+        from chaoslab.analysis import engine as analysis_engine
+        from chaoslab.analysis.narrative import analysis_section
+        from chaoslab.analysis.evidence import EvidenceError
+
+        try:
+            return _plain(analysis_section(analysis_engine.read(settings, analysis_id), section))
+        except EvidenceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @tool(READ)
     def get_recovery(experiment_id: str) -> dict[str, Any]:
         """Recovery evidence, cleanup outcome, final health and overall result of one run."""
         return _plain(api.recovery(experiment_id))

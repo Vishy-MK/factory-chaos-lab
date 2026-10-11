@@ -90,6 +90,13 @@ unrelated services.
   no network-facing control API.
 - No credentials in logs: log excerpts pass through a redaction filter; the environment is never dumped.
 
+## Read-only analysis
+
+`chaoslab analysis` and its Failure Impact Analyst agent cannot inject, clean up, approve, emergency-stop or manage
+the plant. The analyst's tools are filtered to those the MCP server annotates read-only (`ReadOnlyToolBox`), a
+forbidden list is refused at offer and call time, and the analysis code writes only under `results/analysis/`.
+Tests check that no controller or plant call is made and that experiment records are unchanged.
+
 ## Privileges
 
 Everything runs as the unprivileged desktop user. `cpu_pressure` changes CPU affinity of the user's own process and
