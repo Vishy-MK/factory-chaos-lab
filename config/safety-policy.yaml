@@ -24,6 +24,12 @@ resource_limit:
   min_memory_mb: 64
   min_cpu_percent: 5
 
+containers:
+  enabled: true
+  max_duration_s: 30
+  min_memory_mb: 64
+  min_cpus: 0.05
+
 database_latency:
   enabled: true
   max_delay_ms: 1000

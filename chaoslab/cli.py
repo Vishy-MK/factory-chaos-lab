@@ -95,8 +95,10 @@ def cmd_status(args) -> int:
         if status["machines"]:
             m = status["machines"]
             _say(f"machines: {m.get('connected')}/{m.get('machines')} connected")
-        if status["floor"]:
+        if status["floor"] and status["floor"].get("seconds_since") is not None:
             _say(f"floor last recorded a check {status['floor'].get('seconds_since')}s ago")
+        elif status["floor"]:
+            _say("floor: no floor simulator in this deployment")
         for name, row in status["components"].items():
             _say(f"  {name:<10} {row['status']:<9} pid={row['pid']} rss={row['rss_mb']} MB")
         _say(f"plant RSS total {status['plant_rss_mb_total']} MB; host available "
@@ -454,6 +456,139 @@ def cmd_agent(args) -> int:
     _emit(payload, True)
     return code
 
+def cmd_deploy(args) -> int:
+    from chaoslab import proctitle, settings as settings_module
+
+    settings = settings_module.load(Path(args.root) if args.root else None)
+    proctitle.enable()
+    if args.command == "gateway":
+        from chaoslab.deploy import gateway
+
+        proctitle.set_name("cl:gateway")
+        return gateway.run(settings)
+    if args.command == "control-api":
+        from chaoslab.deploy import control_api
+
+        proctitle.set_name("cl:control")
+        try:
+            return control_api.serve(settings)
+        except ValueError as exc:
+            _warn(str(exc))
+            return EXIT_FAILED
+    from chaoslab.deploy import secure
+
+    report = secure.rotate(settings)
+    _emit(report, args.json, f"rotated: {', '.join(report['rotated']) or 'none'}; failed: "
+                             f"{report['failed'] or 'none'}; unchanged (fixed by the floor simulator): "
+                             f"{', '.join(report['not_rotated'])}")
+    return EXIT_OK if not report["failed"] else EXIT_FAILED
+
+
+def cmd_plan(args) -> int:
+    from chaoslab import planning, proctitle, settings as settings_module
+    from chaoslab.agents import commands
+    from chaoslab.agents.llm import LLMError
+
+    root = Path(args.root) if args.root else None
+    settings = settings_module.load(root)
+    proctitle.enable()
+    try:
+        if args.plan_command == "propose":
+            code, payload = commands.plan(root, args.analysis_id)
+            output = payload.get("output") or {}
+            lines = [f"planner saved {len(payload['proposals'])} proposal(s) for {args.analysis_id}"]
+            lines += [f"  {p['proposal_id']}: {p['name']} ({p['fault']}) for {p['finding_ids']}\n    {p['rationale']}"
+                      for p in payload["proposals"]]
+            lines += [f"  not proposed: {n.get('idea')} ({n.get('reason')})" for n in output.get("not_proposed", [])]
+            lines.append("approve one with: python -m chaoslab plan approve <proposal-id>")
+            _emit(payload, args.json, "\n".join(lines))
+            return code
+        if args.plan_command == "list":
+            proposals = planning.list_proposals(settings, args.status)
+            _emit({"proposals": proposals}, args.json, "\n".join(
+                f"{p['status']:<9} {p['proposal_id']}  {p['name']} ({p['fault']})" for p in proposals) or "no proposals")
+            return EXIT_OK
+        if args.plan_command == "show":
+            _, record = planning.load(settings, args.proposal_id)
+            _emit(record, True)
+            return EXIT_OK
+        if args.plan_command == "reject":
+            record = planning.set_status(settings, args.proposal_id, "rejected", reason=args.reason)
+            _emit(record, args.json, f"rejected {record['proposal_id']}")
+            return EXIT_OK
+        code, payload = commands.approve(root, args.proposal_id, via_agent=not args.direct)
+        _emit(payload, True)
+        return code
+    except (LLMError, FileNotFoundError, ValueError) as exc:
+        _warn(str(exc))
+        return EXIT_FAILED
+
+
+def cmd_analysis(args) -> int:
+    from chaoslab import settings as settings_module
+    from chaoslab.analysis import engine as analysis_engine, service
+    from chaoslab.analysis.evidence import EvidenceError
+
+    settings = settings_module.load(Path(args.root) if args.root else None)
+    try:
+        if args.analysis_command == "baseline":
+            payload = service.assess_baseline(settings, args.source, args.observe)
+            text = (f"baseline {payload['baseline_id']}: {payload['readiness']} ({payload['samples']} samples from "
+                    f"{payload['source']})\n  failed checks: {payload['failed_checks'] or 'none'}; not measured: "
+                    f"{payload['unmeasured_checks'] or 'none'}\n  saved {payload['path']}")
+        elif args.analysis_command == "analyze":
+            payload = service.analyse_failure(settings, args.experiment, args.baseline, args.fault_meta,
+                                              with_narrative=not args.no_narrative)
+            score = payload["score"]
+            lines = [f"analysis {payload['analysis_id']}",
+                     f"  baseline readiness {payload['baseline_readiness']}; attribution {payload['attribution']}; "
+                     f"recovery {payload['recovery']}",
+                     f"  score {score['status']}" + (f" {score['score']}" if score.get("score") is not None
+                                                     else f" (missing {score.get('missing_dimensions')})")]
+            lines += [f"  {f['id']} {f['severity']:<8} confidence {f['confidence']:<6} {f['symptom']}"
+                      for f in payload["findings"]]
+            lines += [f"  narrative {payload['narrative_status']}; evidence references resolve: {payload['evidence_ok']}",
+                      f"  report {payload['report']}"]
+            text = "\n".join(lines)
+        elif args.analysis_command == "record":
+            import os
+
+            os.environ["CHAOSLAB_DEPLOYMENT"] = "docker"
+            from chaoslab.analysis import recorder
+
+            settings = settings_module.load(Path(args.root) if args.root else None)
+            print(f"recording the Docker stack read-only for {args.seconds:.0f} s; perform the fault now", flush=True)
+            path = recorder.record(settings, args.seconds, args.label)
+            data = json.loads(path.read_text(encoding="utf-8"))
+            found = data["detection"]
+            payload = {"artifact": str(path), "detection": found, "fault": data["fault"]}
+            text = (f"recording {path}\n  samples {len(data['samples'])}; " +
+                    (f"detected {found['kinds']} on {found['components']} for {found['end'] - found['start']:.1f} s"
+                     if found["detected"] else f"no fault detected ({found.get('reason')})") +
+                    f"\n  analyse it: python -m chaoslab analysis analyze {path}")
+        elif args.analysis_command == "recommend":
+            result = service.recommend(settings, args.analysis_id)
+            payload = result
+            lines = [f"recommender {result['status']}" + (f": {result.get('error')}" if result.get("error") else "")]
+            for rec in (result.get("output") or {}).get("recommendations", []):
+                lines.append(f"  {rec['finding_id']} {rec['title']} (effort {rec['effort']}, confidence "
+                             f"{rec['confidence']}; {len(rec.get('locations') or [])} verified locations)")
+            for item in (result.get("output") or {}).get("not_recommended", []):
+                lines.append(f"  {item['finding_id']} not recommended: {item['reason']}")
+            lines.append(f"  attempts {len(result.get('attempts', []))}")
+            text = "\n".join(lines)
+        else:
+            stored = analysis_engine.read(settings, args.analysis_id)
+            directory = Path(settings.results_dir) / "analysis" / stored["analysis_id"]
+            payload = stored
+            text = (directory / "report.md").read_text(encoding="utf-8")
+    except (EvidenceError, FileNotFoundError, ValueError) as exc:
+        _warn(str(exc))
+        return EXIT_FAILED
+    _emit(payload, args.json, text)
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="chaoslab", description="FactorySemantics chaos laboratory controller")
     parser.add_argument("--root", help="lab root directory (default: the checkout containing this package)")
@@ -525,6 +660,53 @@ def build_parser() -> argparse.ArgumentParser:
     analyze = agent_sub.add_parser("analyze", help="the Recovery Analyst judges one finished experiment")
     analyze.add_argument("experiment_id")
     analyze.set_defaults(func=cmd_agent)
+    plan = sub.add_parser("plan", help="Planner agent proposals; nothing runs until a person approves")
+    plan_sub = plan.add_subparsers(dest="plan_command", required=True)
+    propose = plan_sub.add_parser("propose", help="the Planner proposes follow-up experiments for an analysis")
+    propose.add_argument("analysis_id")
+    plan_list = plan_sub.add_parser("list", help="list proposals")
+    plan_list.add_argument("--status", choices=["proposed", "approved", "rejected", "ran"])
+    plan_show = plan_sub.add_parser("show", help="show one proposal")
+    plan_show.add_argument("proposal_id")
+    plan_approve = plan_sub.add_parser("approve", help="approve a proposal: the Injector runs it")
+    plan_approve.add_argument("proposal_id")
+    plan_approve.add_argument("--direct", action="store_true", help="run with the controller instead of the Injector")
+    plan_reject = plan_sub.add_parser("reject", help="reject a proposal")
+    plan_reject.add_argument("proposal_id")
+    plan_reject.add_argument("--reason", default="")
+    for parser_ in (propose, plan_list, plan_show, plan_approve, plan_reject):
+        parser_.set_defaults(func=cmd_plan)
+    sub.add_parser("gateway", help="LAN gateway in front of the loopback services (scripts/deploy-lan.sh)").set_defaults(
+        func=cmd_deploy)
+    sub.add_parser("control-api", help="token-protected HTTP control API on loopback").set_defaults(func=cmd_deploy)
+    sub.add_parser("deploy-secure-plant", help="replace the MES's public lab passwords with deployment secrets"
+                   ).set_defaults(func=cmd_deploy)
+    analysis = sub.add_parser("analysis", help="read-only failure impact analysis of a finished failure")
+    analysis_sub = analysis.add_subparsers(dest="analysis_command", required=True)
+    base = analysis_sub.add_parser("baseline", help="assess a baseline and save the assessment")
+    base.add_argument("source", nargs="?", help="run id, chaos-opcua report path or measurement artifact path")
+    base.add_argument("--observe", type=float, metavar="SECONDS",
+                      help="instead, observe the running plant read-only for up to 120 s")
+    base.set_defaults(func=cmd_analysis)
+    analyze_cmd = analysis_sub.add_parser("analyze", help="analyse an externally performed failure")
+    analyze_cmd.add_argument("experiment", help="run id, chaos-opcua report path or measurement artifact path")
+    analyze_cmd.add_argument("--baseline", default="own",
+                             help="'own' (the run's own pre-fault window, default), a baseline assessment id, or a "
+                                  "run id / path")
+    analyze_cmd.add_argument("--fault-meta", help="JSON with fault type/target/parameters/timing when not recorded")
+    analyze_cmd.add_argument("--no-narrative", action="store_true", help="deterministic analysis only, no LLM")
+    analyze_cmd.set_defaults(func=cmd_analysis)
+    rec_cmd = analysis_sub.add_parser("record", help="record the Docker stack read-only while an external tool "
+                                                      "injects a fault; detects the fault window")
+    rec_cmd.add_argument("--seconds", type=float, default=120, help="recording length (10..600)")
+    rec_cmd.add_argument("--label", default="external")
+    rec_cmd.set_defaults(func=cmd_analysis)
+    rec = analysis_sub.add_parser("recommend", help="the read-only Recommender agent: fixes with verified locations")
+    rec.add_argument("analysis_id")
+    rec.set_defaults(func=cmd_analysis)
+    show_analysis = analysis_sub.add_parser("show", help="print a stored analysis report")
+    show_analysis.add_argument("analysis_id", nargs="?", default="latest")
+    show_analysis.set_defaults(func=cmd_analysis)
     workload = sub.add_parser("workload", help="run a bounded workload against the lab plant")
     workload.add_argument("--profile", default="baseline")
     workload.add_argument("--seconds", type=int, default=30)

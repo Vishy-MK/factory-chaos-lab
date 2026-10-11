@@ -113,7 +113,7 @@ See `docs/DATABASE_LATENCY.md` and `docs/RESOURCE_LIMIT.md`.
 .venv/bin/python -m chaoslab mcp       # stdio; .mcp.json registers it for Claude Code in this directory
 ```
 
-The same contract as `chaoslab/api.py`, as 21 MCP tools. Only four change anything and are marked destructive:
+The same contract as `chaoslab/api.py`, as 26 MCP tools. Four change the plant and are marked destructive:
 `run_experiment`, `emergency_stop`, `plant_start`, `plant_stop`. The rest read.
 
 | Group | Tools |
@@ -129,8 +129,10 @@ with its reason.
 
 ## Agents
 
-Two LLM agents drive the lab through the MCP tools above, called in-process. Mistral is the default provider;
-any OpenAI-compatible provider works the same way.
+Five LLM agents work through the MCP tools above, called in-process: they plan, inject, judge, explain and
+recommend, and each holds only the tools its job needs. Mistral is the default provider; any OpenAI-compatible
+provider works the same way. The key can live in `runtime/state/llm.env` (mode 600, ignored by git), e.g.
+`MISTRAL_API_KEY=...`; an exported variable takes precedence.
 
 ```bash
 export MISTRAL_API_KEY=...
@@ -144,6 +146,26 @@ python -m chaoslab agent analyze <experiment-id>         # verdict saved as resu
 |---|---|---|
 | Injector | checks health and resources, validates, dry-runs, runs one experiment, waits, emergency-stops if it hangs | plant/resource status, discovery, `validate_experiment`, `run_experiment`, `experiment_status`, `wait_for_experiment`, `emergency_stop` |
 | Recovery Analyst | judges recovery from recovery stages, metrics, logs, scoring and a baseline comparison; may disagree with the lab only with evidence | result tools, `list_runs`, `compare_runs`, `plant_status` (read only) |
+| Planner | proposes follow-up experiments from a failure analysis (retest a low-confidence weakness, check a fix's acceptance criteria, probe a related risk); every proposal is policy-checked and saved, never run | read tools, `validate_experiment`, `propose_experiment` (saves only), `list_proposals` |
+| Failure Impact Analyst | writes the narrative of `chaoslab analysis analyze` from the deterministic results; every claim cites a record that exists | `get_analysis` and result tools (read only) |
+| Recommender | concrete fixes per weakness with source locations it read itself (each re-checked against the file), tradeoffs, effort and acceptance criteria whose numbers must be measured values | `get_analysis`, `get_metrics`, `get_logs`, `read_source`, `search_source` (read only) |
+
+The cycle: `chaoslab analysis analyze <run>` (deterministic analysis, narrative, recommendations) ->
+`chaoslab plan propose <analysis-id>` (Planner) -> `chaoslab plan approve <proposal-id>` (a person; the Injector
+then runs it) -> analyse the new run.
+
+```bash
+python -m chaoslab analysis recommend <analysis-id>   # Recommender only
+python -m chaoslab plan propose <analysis-id>         # Planner: saves proposals, runs nothing
+python -m chaoslab plan list [--status proposed]
+python -m chaoslab plan approve <proposal-id>         # your approval: the Injector runs it (--direct: controller)
+python -m chaoslab plan reject <proposal-id> --reason "..."
+```
+
+Read-only and propose-only roles are enforced from the MCP tool annotations (`chaoslab/agents/restricted.py`): a
+role that lists a destructive tool cannot start, and a call outside the role is refused without running. Agent
+answers are schema-validated; a rejected answer is sent back with the problems and the same conversation
+continues (at most 3 attempts), and at the round limit the agent is asked once for its final answer.
 
 Enforced in code, not left to the prompt: an agent is offered only its own tools and a call to any other is
 refused; `run_experiment` without `dry_run` needs a person's approval (`--approve` gives it in advance; with no
@@ -157,6 +179,41 @@ terminal the answer is no); the safety policy still decides what runs. Transcrip
 | `MISTRAL_API_KEY` / `GROQ_API_KEY` | none | key for the chosen provider |
 | `CHAOSLAB_LLM_MODEL` | `ministral-14b-latest` for Mistral (the free tier allows no larger model); required for Groq | model name |
 | `CHAOSLAB_LLM_BASE_URL` | the provider's | another OpenAI-compatible endpoint |
+
+## Failure impact analysis (read only)
+
+Analyses a failure that something else performed (this lab's controller, the external chaos-opcua tool, or any
+system that writes a `chaoslab-measurements/v1` artifact). It assesses the baseline, compares the same metrics
+before, during and after, assesses impact and recovery, ranks weaknesses by severity with a separate confidence,
+recommends fixes with verified source locations, and computes an explainable resilience score, or
+`insufficient_evidence` when the measurements do not support one. It never injects, cleans up or changes anything;
+see `docs/FAILURE_ANALYSIS.md` for inputs, metric definitions, the severity rubric, the score and the read-only
+boundary.
+
+```bash
+python -m chaoslab analysis baseline <baseline-observe-run-id>          # or --observe 30 against the running plant
+python -m chaoslab analysis analyze <run-id> --baseline <baseline-id>   # or the run's own baseline (default)
+python -m chaoslab analysis analyze injections/chaos-opcua/results/<report>.json
+python -m chaoslab analysis analyze <run-id> --no-narrative             # without an LLM key
+python -m chaoslab analysis show latest                                 # results/analysis/<id>/report.md
+```
+
+Setup is the lab's own (`scripts/setup.sh`); thresholds and weights are in `config/analysis.yaml`. The AI narrative
+uses the same LLM settings as the agents below and a read-only tool set enforced in code; without a key the
+deterministic analysis is saved and the narrative is marked incomplete.
+
+## Docker stack (opt-in)
+
+`scripts/docker-up.sh` runs a lighter MES stack in containers (PostgreSQL, API, OPC sim, OPC agent) beside the
+lightweight plant; `CHAOSLAB_DEPLOYMENT=docker` points the lab at it. Faults on it are performed by an external tool;
+`chaoslab analysis record` observes them read-only and `analysis analyze` explains their impact. See
+`docs/DOCKER.md`.
+
+## Serving the lab to the LAN
+
+`scripts/deploy-lan.sh up` makes Grafana, the MES, the TeamSynapse RAG backend and the lab control API reachable
+from other PCs on the same network, each behind its own login, through a gateway that only admits the LAN subnet.
+See `docs/DEPLOYMENT.md` for URLs, credentials, protections and limitations.
 
 ## Watching it in htop
 
@@ -219,6 +276,23 @@ Prometheus listens on `127.0.0.1:9090` and scrapes the lab exporter (`:9108`, `c
 `observability/grafana/dashboards` (regenerate with `observability/grafana/build_dashboards.py`). Start refuses when
 memory is low. The controller does not depend on any of this.
 
+Grafana is on `http://127.0.0.1:3000` (user `admin`, password `GRAFANA_ADMIN_PASSWORD`, default `lab-only-grafana`).
+Dashboards: **Lab overview**, **Experiment comparison**, **Manufacturing resilience**, **Database and
+resources**, **Injection impact** and **Agents**. **Injection impact** shows which services an injection affects:
+each service (MES API, Database, OPC UA server, machine connectivity, OPC agent / ingestion, shop floor, RAG
+backend) as normal / DEGRADED / DOWN / unknown, judged by the exporter against that service's own rolling baseline
+(the median while no experiment runs), with the measured reason and the injection target. **Agents** shows which
+agent runs and what it is doing now (from its process title), tool calls by agent and tool, refused calls, run
+outcomes and proposals waiting for approval. The last one shows the database latency hook (`chaoslab_db_*`: delay active and configured delay,
+statements per second, mean total vs driver time per statement, a histogram p95, delayed statements, errors and
+"database is locked" errors per database client) and the cgroup counters of components in their lab scope
+(`chaoslab_cgroup_*`: limits, CPU used vs quota, throttled ratio, memory vs `memory.high`/`memory.max`, memory events
+including OOM kills, and PSI stall share). Those series exist only while there is evidence: database metrics after
+the plant was started by the lab, cgroup metrics once a component runs in its scope (after a `resource_limit` run).
+The exporter probes the plant API on its own thread, so a slow or frozen API never makes a scrape time out;
+`chaoslab_api_probe_age_seconds` shows how old the API figures are, and after 15 s without an answer the plant
+reads as down.
+
 ## Emergency stop
 
 ```bash
@@ -265,4 +339,5 @@ Stop the plant, delete `runtime/`, run `scripts/setup.sh`. `results/` and `facto
   availability figures are `null` in short runs. That is reported, not filled in.
 - The lab's own CPU/RSS figures depend on a recorded line replayed from memory: restarting the OPC server restarts
   the replay from the start of the recording.
+- The failure impact analysis's AI narrative is verified only with scripted model responses in this environment.
 - Not implemented: HTTP interface for the AI contract (MCP over stdio exists), Loki, alerting, PostgreSQL deployment, multi-plant faults.

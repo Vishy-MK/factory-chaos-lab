@@ -52,9 +52,12 @@ def store_two_runs(settings):
 
 def test_only_the_tools_that_change_the_plant_are_marked_destructive(server):
     tools = {t.name: t for t in asyncio.run(server.list_tools())}
-    assert len(tools) == 21
-    assert {n for n, t in tools.items() if not t.annotations.read_only_hint} == WRITE_TOOLS
+    assert len(tools) == 26
+    writes = {n for n, t in tools.items() if not t.annotations.read_only_hint}
+    assert writes == WRITE_TOOLS | {"propose_experiment"}
     assert all(tools[n].annotations.destructive_hint for n in WRITE_TOOLS)
+    # propose_experiment saves a proposal for a person to approve; it changes nothing in the plant.
+    assert tools["propose_experiment"].annotations.destructive_hint is False
 
 
 def test_discovery_tools_return_the_lab_contract(server):
@@ -156,4 +159,4 @@ def test_the_cli_serves_the_tools_over_stdio(lab_root):
 
     names = asyncio.run(asyncio.wait_for(list_names(), timeout=30))
     assert WRITE_TOOLS <= names
-    assert len(names) == 21
+    assert len(names) == 26

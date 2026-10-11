@@ -31,6 +31,8 @@ MAX_WAIT_S = 900
 POLL_S = 2.0
 
 WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=False)
+# Writes a lab record (a proposal) but changes nothing in the plant and runs nothing.
+PROPOSE = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False)
 
 # Refusals the caller can act on. Their text reaches the agent; anything else is a crash and stays on the server.
 EXPECTED = (FileNotFoundError, ValueError, model.DefinitionError, PlantError, ConfigError)
@@ -196,6 +198,19 @@ def build_server(root: Path | None = None) -> MCPServer:
         return _plain(api.scoring(experiment_id))
 
     @tool(READ)
+    def get_analysis(analysis_id: str, section: str = "summary") -> dict[str, Any]:
+        """A stored failure impact analysis (results/analysis/). section: summary, baseline, comparisons,
+        recovery, findings, recommendations, score, coverage or refs. Read only."""
+        from chaoslab.analysis import engine as analysis_engine
+        from chaoslab.analysis.narrative import analysis_section
+        from chaoslab.analysis.evidence import EvidenceError
+
+        try:
+            return _plain(analysis_section(analysis_engine.read(settings, analysis_id), section))
+        except EvidenceError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @tool(READ)
     def get_recovery(experiment_id: str) -> dict[str, Any]:
         """Recovery evidence, cleanup outcome, final health and overall result of one run."""
         return _plain(api.recovery(experiment_id))
@@ -227,6 +242,39 @@ def build_server(root: Path | None = None) -> MCPServer:
     def plant_stop() -> dict[str, Any]:
         """Stop the lab plant and the exporter. Interrupts anything that depends on the plant."""
         return _plain(life.stop())
+
+    # ------------------------------------------------------------ source and planning
+
+    @tool(READ)
+    def read_source(path: str, start_line: int = 1, end_line: int = 80) -> dict[str, Any]:
+        """Lines of one upstream MES source file (factorysemantics-mes/src/fsmes/...), at most 200. Read only."""
+        from chaoslab.analysis import source
+
+        return _plain(source.read(settings, path, start_line, end_line))
+
+    @tool(READ)
+    def search_source(pattern: str, path_glob: str = "**/*.py", max_results: int = 20) -> dict[str, Any]:
+        """Regex search in the upstream MES source; returns path, line and text of each match. Read only."""
+        from chaoslab.analysis import source
+
+        return _plain(source.search(settings, pattern, path_glob, max_results))
+
+    @tool(PROPOSE)
+    def propose_experiment(definition: dict, rationale: str, analysis_id: str | None = None,
+                           finding_ids: list[str] | None = None, expected_outcome: str = "") -> dict[str, Any]:
+        """Save a proposed experiment for a person to approve. Validates it against the safety policy first and
+        saves only an allowed one. Runs nothing; `chaoslab plan approve <proposal-id>` is the only way it runs."""
+        from chaoslab import planning
+
+        return _plain(planning.propose(settings, api, definition, rationale, analysis_id, finding_ids or [],
+                                       expected_outcome))
+
+    @tool(READ)
+    def list_proposals(status: str | None = None) -> dict[str, Any]:
+        """Proposed experiments and their status (proposed, approved, rejected, ran). Read only."""
+        from chaoslab import planning
+
+        return _plain({"proposals": planning.list_proposals(settings, status)})
 
     return mcp
 

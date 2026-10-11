@@ -36,7 +36,8 @@ class RecoveryVerifier:
         machines = sample["machines"]
         connected_ok = machines["total"] is not None and machines["connected"] == machines["total"]
         age = sample["floor_seconds_since_check"]
-        floor_ok = age is not None and age <= self.floor_age_limit_s
+        # A deployment without a floor simulator (the Docker stack) has nothing to judge there.
+        floor_ok = "floor" not in self.components or (age is not None and age <= self.floor_age_limit_s)
         current_id = sample["tag_values_max_id"]
         advancing = False
         advance_detail = "no tag id available"

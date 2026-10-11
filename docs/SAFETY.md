@@ -48,7 +48,9 @@ file.
    controllers are taken over).
 4. **Intent record before injection**: the lease lists what is about to be done before it is done, so cleanup is
    possible even if the controller dies between the two.
-5. **Independent watchdog**: a separate process (own session) started per experiment. It cleans up the lease's
+5. **Independent watchdog**: a separate process started per experiment as its own transient user-systemd service
+   (`chaoslab-watchdog-<id>.service`), so killing the controller, its terminal or its session cannot take the
+   watchdog with it (falls back to a detached process in its own session without a user manager). It cleans up the lease's
    records if the controller process disappears or the deadline passes, then exits. It is bound to the experiment id
    so it cannot act on a later experiment.
 6. **Self-limiting helpers**: the CPU burner and the SQLite lock holder end themselves at their deadline and clamp
@@ -86,9 +88,17 @@ unrelated services.
 - No deleting or moving database files; the write-lock fault only holds a lock and rolls back, and the latency
    fault only adds sleeps before statements. Neither changes data.
 - No restart of anything outside the four plant components.
-- No exposure to the LAN: the plant API binds `127.0.0.1`, the exporter refuses a non-loopback bind, and the lab has
-  no network-facing control API.
+- No exposure to the LAN by default: the plant API binds `127.0.0.1` and the exporter refuses a non-loopback bind.
+  `scripts/deploy-lan.sh` exposes chosen services to the LAN subnet only, through a gateway, each behind its own
+  login (see `docs/DEPLOYMENT.md`); Prometheus and the exporter are never exposed.
 - No credentials in logs: log excerpts pass through a redaction filter; the environment is never dumped.
+
+## Read-only analysis
+
+`chaoslab analysis` and its Failure Impact Analyst agent cannot inject, clean up, approve, emergency-stop or manage
+the plant. The analyst's tools are filtered to those the MCP server annotates read-only (`ReadOnlyToolBox`), a
+forbidden list is refused at offer and call time, and the analysis code writes only under `results/analysis/`.
+Tests check that no controller or plant call is made and that experiment records are unchanged.
 
 ## Privileges
 

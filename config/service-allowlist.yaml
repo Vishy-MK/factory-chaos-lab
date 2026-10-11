@@ -22,6 +22,21 @@ plants:
       - api
       - opc-agent
 
+  # The lab compose stack (CHAOSLAB_DEPLOYMENT=docker). Components are containers labelled chaoslab.target=<name>.
+  bottling-docker:
+    api_port: 8020
+    deployment: docker
+    components:
+      api:
+        container: api
+      opc-sim:
+        container: opc-sim
+      opc-agent:
+        container: opc-agent
+      postgres:
+        container: postgres
+    database: postgresql
+
 fault_targets:
   process_outage:
     - api
@@ -44,3 +59,23 @@ fault_targets:
     - database
   database_latency:
     - database
+  container_stop:
+    - api
+    - opc-sim
+    - opc-agent
+  container_pause:
+    - api
+    - opc-sim
+    - opc-agent
+    - postgres
+  container_resource_limit:
+    - api
+    - opc-sim
+    - opc-agent
+    - postgres
+  container_network_disconnect:
+    - api
+    - opc-sim
+    - opc-agent
+  database_outage:
+    - postgres

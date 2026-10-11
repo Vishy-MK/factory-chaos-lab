@@ -92,3 +92,36 @@ def test_watchdog_bound_to_an_experiment_exits_when_the_lease_changes_hands(lab_
     current = json.loads(settings.lease_file.read_text())
     assert current["experiment_id"] == "20261010T000000Z-new-aaaaaa"
     assert current["state"] != "released"
+
+
+def test_spawn_runs_the_watchdog_as_its_own_user_service(lab_root, monkeypatch):
+    calls = []
+
+    class Done:
+        def __init__(self, code=0, out=""):
+            self.returncode, self.stdout = code, out
+
+    def runner(args, **kwargs):
+        calls.append(args)
+        return Done(0, "4242\n") if args[0] == "systemctl" else Done(0)
+
+    monkeypatch.setenv("CHAOSLAB_DEPLOYMENT", "docker")
+    assert watchdog.spawn(lab_root, "20261011T000000Z-x-aaaaaa", runner=runner) == 4242
+    run = calls[0]
+    assert run[:2] == ["systemd-run", "--user"] and "--unit=chaoslab-watchdog-20261011T000000Z-x-aaaaaa" in run
+    assert "--setenv=CHAOSLAB_DEPLOYMENT=docker" in run
+    assert run[run.index("--") + 1:][1:3] == ["-m", "chaoslab.chaos.watchdog"]
+
+
+def test_spawn_falls_back_to_a_detached_process(lab_root, monkeypatch):
+    def broken(args, **kwargs):
+        raise FileNotFoundError("systemd-run")
+
+    pid = watchdog.spawn(lab_root, "20261011T000001Z-y-bbbbbb", runner=broken)
+    try:
+        assert pid > 0 and psutil.pid_exists(pid)
+    finally:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass

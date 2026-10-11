@@ -43,15 +43,48 @@ def run(root: Path, poll_s: float = 1.0, experiment_id: str | None = None) -> in
         time.sleep(poll_s)
 
 
-def spawn(root: Path, experiment_id: str | None = None) -> int:
+#: Environment the watchdog needs from the controller (which deployment, where the lab lives, the reader secret).
+PASS_ENV = ("CHAOSLAB_DEPLOYMENT", "CHAOSLAB_ROOT", "CHAOSLAB_VENV", "FSMES_ANALYST_PASSWORD", "PATH", "HOME")
+
+
+def _command(root: Path, experiment_id: str | None) -> list[str]:
     command = [sys.executable, "-m", "chaoslab.chaos.watchdog", "--root", str(root)]
     if experiment_id:
         command += ["--experiment-id", experiment_id]
-    process = subprocess.Popen(
-        command,
-        cwd=str(PACKAGE_ROOT), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    return command
+
+
+def _unit(experiment_id: str | None) -> str:
+    safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in (experiment_id or "active"))[-80:]
+    return f"chaoslab-watchdog-{safe}"
+
+
+def spawn(root: Path, experiment_id: str | None = None, runner=subprocess.run) -> int:
+    """Start the watchdog outside the controller's process tree.
+
+    As a transient user-systemd service it belongs to the user's systemd manager, not to the controller, its
+    terminal or its session, so killing any of those cannot take the watchdog with it. Without a usable user
+    manager it falls back to a detached child process in its own session.
+    """
+    command = _command(root, experiment_id)
+    unit = _unit(experiment_id)
+    systemd = ["systemd-run", "--user", "--quiet", "--collect", f"--unit={unit}",
+               f"--working-directory={PACKAGE_ROOT}", "-p", "KillMode=control-group"]
+    for name in PASS_ENV:
+        if os.environ.get(name):
+            systemd.append(f"--setenv={name}={os.environ[name]}")
+    try:
+        started = runner([*systemd, "--", *command], capture_output=True, text=True, timeout=15, check=False)
+        if started.returncode == 0:
+            shown = runner(["systemctl", "--user", "show", "-p", "MainPID", "--value", f"{unit}.service"],
+                           capture_output=True, text=True, timeout=10, check=False)
+            pid = int((shown.stdout or "0").strip() or 0)
+            if pid > 0:
+                return pid
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass
+    process = subprocess.Popen(command, cwd=str(PACKAGE_ROOT), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, start_new_session=True)
     return process.pid
 
 

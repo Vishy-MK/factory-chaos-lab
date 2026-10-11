@@ -1,0 +1,38 @@
+# LAN deployment (scripts/deploy-lan.sh). Every service keeps listening on 127.0.0.1; the gateway listens on this
+# PC's LAN address and forwards only clients from the LAN subnet. Prometheus and the exporter are never exposed.
+lan:
+  # The interface of the default route, or a name such as wlp1s0.
+  interface: auto
+  # Extra networks allowed besides the interface's own subnet, e.g. ["10.0.0.0/8"]. Loopback is always allowed.
+  extra_allowed: []
+  max_connections_per_route: 64
+
+routes:
+  grafana:
+    listen_port: 3000
+    target: 127.0.0.1:3000
+    login: "Grafana users (admin, viewer)"
+  mes:
+    listen_port: 8010
+    target: 127.0.0.1:8010
+    login: "MES accounts"
+  rag:
+    listen_port: 8200
+    target: 127.0.0.1:8200
+    login: "X-API-Key header (BACKEND_API_KEY)"
+  control:
+    listen_port: 8090
+    target: 127.0.0.1:8090
+    login: "Authorization: Bearer CHAOSLAB_CONTROL_TOKEN"
+
+control_api:
+  host: 127.0.0.1
+  port: 8090
+
+rag_backend:
+  # The TeamSynapse FastAPI backend, run inside a cgroup scope by its own run_constrained.sh.
+  directory: /home/vishy/TeamSynapse/backend
+  port: 8200
+  memory_max: 1G
+  cpu_quota: 200%
+  threads: 2

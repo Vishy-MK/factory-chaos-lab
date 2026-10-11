@@ -166,3 +166,123 @@ comparison.text("Baseline vs fault vs recovery",
                 "`results/<id>/result.json`. Compare two runs with `scripts/run-experiment.sh` output or "
                 "`python -m chaoslab compare <a> <b>`. Orange bands above are experiment windows.", width=6)
 comparison.write("experiment-comparison.json")
+
+DELAY = [{"type": "value", "options": {
+    "0": {"text": "off", "color": "green"}, "1": {"text": "DELAYING", "color": "orange"}}}]
+LIMITED = [{"type": "value", "options": {
+    "0": {"text": "unlimited", "color": "green"}, "1": {"text": "LIMITED", "color": "orange"}}}]
+
+resources_board = Board("chaoslab-db-resources", "Database and resources", ["chaoslab", "database", "cgroups"])
+resources_board.stat("Database delay", [target("chaoslab_db_delay_active", "{{component}}")], mappings=DELAY, width=6,
+                     description="From the lab's database hook in the plant's database clients.")
+resources_board.stat("Configured delay", [target("chaoslab_db_delay_configured_seconds", "delay")], unit="s", width=6,
+                     description="Absent when no delay is active.")
+resources_board.stat("cgroup limits", [target("chaoslab_cgroup_limited", "{{component}}")], mappings=LIMITED,
+                     width=6, description="Only components running in their lab scope (resource_limit) appear.")
+resources_board.stat("OOM kills (window)", [target("sum(increase(chaoslab_cgroup_memory_events_total"
+                                                   "{event=\"oom_kill\"}[$__range]))", "oom kills")],
+                     width=6, decimals=0)
+resources_board.timeseries("Database statements / s", [
+    target("sum by (component) (rate(chaoslab_db_statements_total[30s]))", "{{component}}")], minimum=0)
+resources_board.timeseries("Mean statement time", [
+    target("sum by (component) (rate(chaoslab_db_statement_seconds_total[30s])) / "
+           "sum by (component) (rate(chaoslab_db_statements_total[30s]))", "{{component}} total", "A"),
+    target("sum by (component) (rate(chaoslab_db_driver_seconds_total[30s])) / "
+           "sum by (component) (rate(chaoslab_db_statements_total[30s]))", "{{component}} driver", "B")],
+    unit="s", description="Total includes the injected delay; driver excludes it. The gap is the injected delay.")
+resources_board.timeseries("Statement time p95 (histogram)", [
+    target("histogram_quantile(0.95, sum by (le, component) "
+           "(rate(chaoslab_db_statement_duration_seconds_bucket[30s])))", "{{component}} p95")], unit="s",
+    description="Bucket-based estimate from the hook's histogram.")
+resources_board.timeseries("Delayed statements / s and delay added", [
+    target("sum by (component) (rate(chaoslab_db_injected_statements_total[30s]))", "{{component}} delayed /s", "A"),
+    target("sum by (component) (rate(chaoslab_db_injected_delay_seconds_total[30s]))", "{{component}} delay s/s", "B")],
+    minimum=0)
+resources_board.timeseries("Database errors / s", [
+    target("sum by (component) (rate(chaoslab_db_errors_total[30s]))", "{{component}} errors", "A"),
+    target("sum by (component) (rate(chaoslab_db_lock_errors_total[30s]))", "{{component}} locked", "B")], minimum=0)
+resources_board.timeseries("API /health latency", [target("chaoslab_api_health_latency_seconds", "{{plant}}")],
+                           unit="s", description="Downstream effect of database delay or CPU limits.")
+resources_board.timeseries("CPU used vs quota (CPUs)", [
+    target("rate(chaoslab_cgroup_cpu_usage_seconds_total[30s])", "{{component}} used", "A"),
+    target("chaoslab_cgroup_cpu_quota_cpus", "{{component}} quota", "B")], minimum=0)
+resources_board.timeseries("CPU throttled ratio", [
+    target("rate(chaoslab_cgroup_cpu_throttled_periods_total[30s]) / rate(chaoslab_cgroup_cpu_periods_total[30s])",
+           "{{component}}")], unit="percentunit", minimum=0,
+    description="Share of CFS periods in which the component was throttled.")
+resources_board.timeseries("Scope memory vs limits", [
+    target("chaoslab_cgroup_memory_current_bytes", "{{component}} current", "A"),
+    target("chaoslab_cgroup_memory_high_bytes", "{{component}} memory.high", "B"),
+    target("chaoslab_cgroup_memory_max_bytes", "{{component}} memory.max", "C")], unit="bytes", minimum=0)
+resources_board.timeseries("Memory events / s", [
+    target("rate(chaoslab_cgroup_memory_events_total[30s])", "{{component}} {{event}}")], minimum=0)
+resources_board.timeseries("Pressure stall (share of time)", [
+    target("rate(chaoslab_cgroup_pressure_stall_seconds_total[30s])", "{{component}} {{resource}}")],
+    unit="percentunit", minimum=0, description="PSI 'some': time at least one task in the scope was stalled.")
+resources_board.write("database-and-resources.json")
+
+IMPACT = [{"type": "value", "options": {
+    "-1": {"text": "unknown", "color": "text"}, "0": {"text": "normal", "color": "green"},
+    "1": {"text": "DEGRADED", "color": "orange"}, "2": {"text": "DOWN", "color": "red"}}}]
+
+impact = Board("chaoslab-impact", "Injection impact", ["chaoslab", "impact"])
+impact.stat("Injection target", [target("chaoslab_injection_target", "{{fault}} -> {{service}}")], width=8,
+            mappings=[{"type": "value", "options": {"1": {"text": "ACTIVE", "color": "orange"}}}],
+            description="Absent while no experiment holds the lease.")
+impact.stat("Services degraded", [target("count(chaoslab_service_impact == 1) or vector(0)", "degraded")], width=4,
+            decimals=0)
+impact.stat("Services down", [target("count(chaoslab_service_impact == 2) or vector(0)", "down")], width=4,
+            decimals=0)
+impact.stat("Experiment", [target("chaoslab_experiment_active", "state")], mappings=ACTIVE, width=8)
+impact.state_timeline("Service status (each against its own baseline)",
+                      [target("chaoslab_service_impact", "{{plant}} / {{service}}")], IMPACT,
+                      description="normal / DEGRADED / DOWN per service, judged by the exporter from its own probes "
+                                  "against each service's rolling baseline; unknown when not measured.")
+impact.table("Now: status and measured reason", [target("chaoslab_service_impact_info", "info")], width=24,
+             description="The reason is what was measured, e.g. '/health 1210 ms vs limit 120 ms'.")
+impact.timeseries("API /health latency", [target("chaoslab_api_health_latency_seconds", "{{plant}}")], unit="s",
+                  width=8)
+impact.timeseries("Tag ingestion", [target("rate(chaoslab_plant_tag_values_max_id[30s])", "tags / s")], width=8,
+                  minimum=0)
+impact.timeseries("Database statement time", [
+    target("sum(rate(chaoslab_db_statement_seconds_total[30s])) / sum(rate(chaoslab_db_statements_total[30s]))",
+           "mean")], unit="s", width=8)
+CONTAINER = [{"type": "value", "options": {
+    "0": {"text": "STOPPED", "color": "red"}, "1": {"text": "running", "color": "green"},
+    "2": {"text": "PAUSED", "color": "orange"}, "3": {"text": "restarting", "color": "yellow"}}}]
+NETWORK = [{"type": "value", "options": {"0": {"text": "OFF NETWORK", "color": "red"},
+                                          "1": {"text": "attached", "color": "green"}}}]
+impact.state_timeline("Docker stack: container state", [target("chaoslab_container_state_code", "{{component}}")],
+                      CONTAINER, description="The lab's compose stack (scripts/docker-up.sh); absent when it is down.")
+impact.state_timeline("Docker stack: lab network attachment",
+                      [target("chaoslab_container_on_lab_network", "{{component}}")], NETWORK)
+impact.timeseries("Docker stack: container restarts", [target("chaoslab_container_restarts", "{{component}}")],
+                  width=8, minimum=0)
+impact.timeseries("Docker stack: container CPU", [target("chaoslab_container_cpu_percent", "{{component}}")],
+                  unit="percent", width=8, minimum=0)
+impact.timeseries("Docker stack: container memory", [target("chaoslab_container_memory_bytes", "{{component}}")],
+                  unit="bytes", width=8, minimum=0)
+impact.write("injection-impact.json")
+
+agents = Board("chaoslab-agents", "Agents", ["chaoslab", "agents"])
+agents.stat("Agents running", [target("sum(chaoslab_agent_active) or vector(0)", "running")], width=6, decimals=0)
+agents.stat("Tool calls (all time)", [target("sum(chaoslab_agent_tool_calls_total) or vector(0)", "calls")], width=6,
+            decimals=0)
+agents.stat("Refused tool calls", [target("sum(chaoslab_agent_tool_calls_total{outcome=\"refused\"}) or vector(0)",
+                                          "refused")], width=6, decimals=0,
+            description="Calls outside an agent's permitted tools, or real faults a person denied.")
+agents.stat("Proposals waiting for approval", [target("chaoslab_plan_proposals{status=\"proposed\"}", "proposed")],
+            width=6, decimals=0)
+agents.state_timeline("Which agent is running", [target("chaoslab_agent_active", "{{role}}")],
+                      [{"type": "value", "options": {"0": {"text": "idle", "color": "transparent"},
+                                                      "1": {"text": "RUNNING", "color": "blue"}}}])
+agents.table("What each agent is doing now", [target("chaoslab_agent_activity_info", "activity")], width=24,
+             description="Live from the agents' process titles: round, tool and subject.")
+agents.table("Tool calls by agent and tool", [target("sum by (role, tool, outcome) (chaoslab_agent_tool_calls_total)",
+                                                     "calls")], width=12)
+agents.table("Agent runs by outcome", [target("chaoslab_agent_runs_total", "runs")], width=12)
+agents.timeseries("Tool calls added", [target("sum by (role) (increase(chaoslab_agent_tool_calls_total[5m]))",
+                                              "{{role}}")], minimum=0,
+                  description="Counted when an agent saves its transcript at the end of a run.")
+agents.timeseries("Proposals by status", [target("chaoslab_plan_proposals", "{{status}}")], minimum=0)
+agents.write("agents.json")

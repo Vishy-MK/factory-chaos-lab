@@ -12,13 +12,14 @@ import psutil
 
 from chaoslab import resources
 from chaoslab.adapters.factorysemantics import FactorySemanticsAdapter, PlantError
+from chaoslab.adapters.docker_plant import make_adapter
 from chaoslab.settings import PACKAGE_ROOT, ConfigError, Settings
 
 
 class Lifecycle:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.plant = FactorySemanticsAdapter(settings)
+        self.plant = make_adapter(settings)
 
     def prerequisites(self) -> list[dict]:
         checks = []
